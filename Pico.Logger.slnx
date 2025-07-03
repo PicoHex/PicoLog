@@ -1,8 +1,11 @@
 <Solution>
   <Folder Name="/samples/">
+    <Project Path="samples\Pico.Logger.Sample\Pico.Logger.Sample.csproj" Type="Classic C#" />
     <File Path="samples\README.md" />
   </Folder>
   <Folder Name="/src/">
+    <Project Path="src\Pico.Logger.Abs\Pico.Logger.Abs.csproj" Type="Classic C#" />
+    <Project Path="src\Pico.Logger\Pico.Logger.csproj" Type="Classic C#" />
     <File Path="src\README.md" />
   </Folder>
   <Folder Name="/tests/">

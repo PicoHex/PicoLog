@@ -8,7 +8,7 @@
 
     <ItemGroup>
       <ProjectReference Include="..\..\DependencyInjection\Pico.DI.Abs\Pico.DI.Abs.csproj" />
-      <ProjectReference Include="..\Pico.Log.Abs\Pico.Log.Abs.csproj">
+      <ProjectReference Include="..\Pico.Logger.Abs\Pico.Logger.Abs.csproj">
           <ReferenceOutputAssembly>true</ReferenceOutputAssembly>
           <Private>false</Private>
       </ProjectReference>
