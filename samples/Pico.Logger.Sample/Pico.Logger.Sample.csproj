@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
@@ -14,6 +14,10 @@
     <ItemGroup>
       <ProjectReference Include="..\..\src\Pico.Logger.Abs\Pico.Logger.Abs.csproj" />
       <ProjectReference Include="..\..\src\Pico.Logger\Pico.Logger.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <PackageReference Include="Pico.DI" Version="0.0.8" />
     </ItemGroup>
 
 </Project>

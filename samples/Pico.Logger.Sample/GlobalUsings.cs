@@ -3,5 +3,6 @@
 global using System.Diagnostics;
 global using Pico.DI;
 global using Pico.DI.Abs;
+global using Pico.Logger;
 global using Pico.Logger.Abs;
-global using Pico.Logger.Extensions;
+global using Pico.Logger.Sample;
