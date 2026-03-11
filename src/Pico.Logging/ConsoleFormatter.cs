@@ -4,9 +4,12 @@ public sealed class ConsoleFormatter : ILogFormatter
 {
     public string Format(LogEntry entry)
     {
+        var level = entry.Level.ToString().ToUpperInvariant();
+
         var sb = new StringBuilder()
             .Append($"[{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff}] ")
-            .Append($"{entry.Level.ToString().ToUpper(), -8}")
+            .Append(level.PadRight(9))
+            .Append(' ')
             .Append($"[{entry.Category}] ")
             .Append(entry.Message);
 

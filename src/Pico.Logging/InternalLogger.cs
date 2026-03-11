@@ -8,7 +8,8 @@ internal sealed class InternalLogger : ILogger, IDisposable, IAsyncDisposable
     private readonly Task _processingTask;
     private readonly ILogSink[] _sinksArray;
     private readonly LoggerFactory _factory;
-    private readonly ILogSink _defaultSink;
+    private readonly ILogSink? _fallbackSink;
+    private int _disposeState;
 
     public InternalLogger(string categoryName, IEnumerable<ILogSink> sinks, LoggerFactory factory)
     {
@@ -19,14 +20,15 @@ internal sealed class InternalLogger : ILogger, IDisposable, IAsyncDisposable
             new BoundedChannelOptions(65535) { FullMode = BoundedChannelFullMode.DropOldest }
         );
         _processingTask = Task.Run(ProcessEntries);
-        _defaultSink =
-            _sinksArray.FirstOrDefault(p => p is ConsoleSink)
-            ?? throw new InvalidOperationException("No ConsoleLogSink registered");
+        _fallbackSink = _sinksArray.FirstOrDefault(p => p is ConsoleSink);
     }
 
     public IDisposable BeginScope<TState>(TState state)
         where TState : notnull
     {
+        if (_disposeState != 0)
+            return Scope.Empty;
+
         var stack = _scopes.Value ?? ImmutableStack<object>.Empty;
         _scopes.Value = stack.Push(state);
         return new Scope(
@@ -36,7 +38,7 @@ internal sealed class InternalLogger : ILogger, IDisposable, IAsyncDisposable
 
     public void Log(LogLevel logLevel, string message, Exception? exception)
     {
-        if (!IsEnabled(logLevel))
+        if (_disposeState != 0 || !_factory.IsEnabled(logLevel))
             return;
 
         var entry = new LogEntry
@@ -59,7 +61,7 @@ internal sealed class InternalLogger : ILogger, IDisposable, IAsyncDisposable
         CancellationToken cancellationToken = default
     )
     {
-        if (!IsEnabled(logLevel))
+        if (_disposeState != 0 || !_factory.IsEnabled(logLevel))
             return;
 
         var entry = new LogEntry
@@ -72,11 +74,15 @@ internal sealed class InternalLogger : ILogger, IDisposable, IAsyncDisposable
             Scopes = _scopes.Value?.Reverse().ToList()
         };
 
-        await _channel.Writer.WriteAsync(entry, cancellationToken);
+        try
+        {
+            await _channel.Writer.WriteAsync(entry, cancellationToken).ConfigureAwait(false);
+        }
+        catch (ChannelClosedException)
+        {
+            // Ignore writes that race with shutdown.
+        }
     }
-
-    private bool IsEnabled(LogLevel logLevel) =>
-        _factory.MinLevel != LogLevel.None && logLevel <= _factory.MinLevel;
 
     private async ValueTask ProcessEntries()
     {
@@ -92,15 +98,25 @@ internal sealed class InternalLogger : ILogger, IDisposable, IAsyncDisposable
                     }
                     catch (Exception ex)
                     {
-                        await LogSinkErrorAsync(ex, entry).ConfigureAwait(false);
+                        await LogSinkErrorAsync(sink, ex, entry).ConfigureAwait(false);
                     }
                 }
             );
         }
     }
 
-    private async ValueTask LogSinkErrorAsync(Exception ex, LogEntry originalEntry)
+    private async ValueTask LogSinkErrorAsync(
+        ILogSink failingSink,
+        Exception ex,
+        LogEntry originalEntry
+    )
     {
+        if (_fallbackSink is null || ReferenceEquals(_fallbackSink, failingSink))
+        {
+            Debug.WriteLine($"Sink write error for '{originalEntry.Category}': {ex}");
+            return;
+        }
+
         var errorEntry = new LogEntry
         {
             Timestamp = DateTimeOffset.Now,
@@ -110,19 +126,31 @@ internal sealed class InternalLogger : ILogger, IDisposable, IAsyncDisposable
             Exception = ex
         };
 
-        await _defaultSink.WriteAsync(errorEntry).ConfigureAwait(false);
+        try
+        {
+            await _fallbackSink.WriteAsync(errorEntry).ConfigureAwait(false);
+        }
+        catch (Exception fallbackException)
+        {
+            Debug.WriteLine($"Fallback sink write error: {fallbackException}");
+        }
     }
 
-    private class Scope(Action onDispose) : IDisposable
+    private sealed class Scope(Action? onDispose) : IDisposable
     {
-        public void Dispose() => onDispose();
+        public static Scope Empty { get; } = new(null);
+
+        public void Dispose() => onDispose?.Invoke();
     }
 
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 
     public async ValueTask DisposeAsync()
     {
-        _channel.Writer.Complete();
+        if (Interlocked.Exchange(ref _disposeState, 1) != 0)
+            return;
+
+        _channel.Writer.TryComplete();
 
         try
         {
@@ -130,27 +158,7 @@ internal sealed class InternalLogger : ILogger, IDisposable, IAsyncDisposable
         }
         catch (TimeoutException)
         {
-            // Log timeout if needed
-        }
-
-        foreach (var sink in _sinksArray)
-        {
-            await TryDisposeSinkAsync(sink).ConfigureAwait(false);
-        }
-    }
-
-    private async ValueTask TryDisposeSinkAsync(ILogSink sink)
-    {
-        try
-        {
-            if (sink is IAsyncDisposable asyncDisposable)
-                await asyncDisposable.DisposeAsync().ConfigureAwait(false);
-            else if (sink is IDisposable disposable)
-                disposable.Dispose();
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"Sink disposal error: {ex}");
+            Debug.WriteLine($"Logger shutdown timed out for category '{_categoryName}'.");
         }
     }
 }

@@ -9,6 +9,7 @@
     <Project Path="src/Pico.Logging/Pico.Logging.csproj" Type="C#" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Pico.Logging.Tests/Pico.Logging.Tests.csproj" Type="C#" />
     <File Path="tests\README.md" />
   </Folder>
 </Solution>

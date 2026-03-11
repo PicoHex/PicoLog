@@ -17,7 +17,7 @@
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="Pico.DI" Version="0.1.0" />
+      <PackageReference Include="Pico.DI" Version="2026.1.6" />
     </ItemGroup>
 
 </Project>

@@ -5,12 +5,12 @@ public sealed class FileSink : ILogSink
     private readonly ILogFormatter _formatter;
     private readonly StreamWriter _writer;
     private readonly SemaphoreSlim _semaphore = new(1, 1);
-    private bool _disposed;
+    private int _disposeState;
 
-    public FileSink(ILogFormatter formatter)
+    public FileSink(ILogFormatter formatter, string filePath = "logs/test.log")
     {
-        _formatter = formatter;
-        var filePath = "logs/test.log";
+        _formatter = formatter ?? throw new ArgumentNullException(nameof(formatter));
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
 
         var fullPath = Path.GetFullPath(filePath);
         var directory = Path.GetDirectoryName(fullPath)!;
@@ -36,22 +36,33 @@ public sealed class FileSink : ILogSink
 
     public async ValueTask WriteAsync(LogEntry entry, CancellationToken cancellationToken = default)
     {
-        await _semaphore.WaitAsync(cancellationToken);
+        if (Volatile.Read(ref _disposeState) != 0)
+            return;
+
+        var lockTaken = false;
+
         try
         {
+            await _semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+            lockTaken = true;
+
+            if (Volatile.Read(ref _disposeState) != 0)
+                return;
+
             var message = _formatter.Format(entry);
-            await _writer.WriteLineAsync(message);
-            await _writer.FlushAsync(cancellationToken);
+            await _writer.WriteLineAsync(message).ConfigureAwait(false);
+            await _writer.FlushAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            _semaphore.Release();
+            if (lockTaken)
+                _semaphore.Release();
         }
     }
 
     public void Dispose()
     {
-        if (_disposed)
+        if (Interlocked.Exchange(ref _disposeState, 1) != 0)
             return;
 
         _semaphore.Wait();
@@ -62,30 +73,28 @@ public sealed class FileSink : ILogSink
         }
         finally
         {
-            _disposed = true;
             _semaphore.Release();
-            _semaphore.Dispose();
         }
+
+        GC.SuppressFinalize(this);
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_disposed)
+        if (Interlocked.Exchange(ref _disposeState, 1) != 0)
             return;
 
-        await _semaphore.WaitAsync();
+        await _semaphore.WaitAsync().ConfigureAwait(false);
         try
         {
-            await _writer.FlushAsync();
-            await _writer.DisposeAsync();
+            await _writer.FlushAsync().ConfigureAwait(false);
+            await _writer.DisposeAsync().ConfigureAwait(false);
         }
         finally
         {
-            _disposed = true;
             _semaphore.Release();
-            _semaphore.Dispose();
         }
-    }
 
-    ~FileSink() => Dispose();
+        GC.SuppressFinalize(this);
+    }
 }
