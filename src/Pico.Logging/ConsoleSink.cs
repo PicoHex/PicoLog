@@ -1,14 +1,23 @@
 ﻿namespace Pico.Logging;
 
-public sealed class ConsoleSink(ILogFormatter formatter) : ILogSink
+public sealed class ConsoleSink : ILogSink
 {
+    private readonly ILogFormatter _formatter;
+    private readonly TextWriter _writer;
+
+    public ConsoleSink(ILogFormatter formatter, TextWriter? writer = null)
+    {
+        _formatter = formatter ?? throw new ArgumentNullException(nameof(formatter));
+        _writer = writer ?? Console.Out;
+    }
+
     public ValueTask WriteAsync(LogEntry entry, CancellationToken cancellationToken = default)
     {
-        WriteColoredLog(entry.Level, formatter.Format(entry));
+        WriteColoredLog(entry.Level, _formatter.Format(entry));
         return ValueTask.CompletedTask;
     }
 
-    private static void WriteColoredLog(LogLevel level, string message)
+    private void WriteColoredLog(LogLevel level, string message)
     {
         var originalColor = Console.ForegroundColor;
 
@@ -26,7 +35,7 @@ public sealed class ConsoleSink(ILogFormatter formatter) : ILogSink
             _ => originalColor
         };
 
-        Console.WriteLine(message);
+        _writer.WriteLine(message);
         Console.ForegroundColor = originalColor;
     }
 

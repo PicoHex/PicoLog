@@ -166,6 +166,12 @@ The sample project publishes with Native AOT enabled:
 dotnet publish -c Release -r win-x64 -p:PublishAOT=true
 ```
 
+The repository also includes a publish-level validation script that publishes the sample, runs the generated executable, and verifies the final shutdown log entries were flushed correctly:
+
+```powershell
+./scripts/Validate-AotSample.ps1
+```
+
 ## Building from Source
 
 ### Prerequisites

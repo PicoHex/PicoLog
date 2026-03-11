@@ -43,7 +43,37 @@ jobs:
       run: dotnet build --configuration Release --no-restore
     
     - name: Run tests
-      run: dotnet test --configuration Release --no-build --verbosity normal
+      run: dotnet test --solution ./Pico.Logging.slnx --configuration Release --no-build --verbosity normal
+
+  validate-aot-sample:
+    name: Validate Native AOT Sample
+    runs-on: windows-latest
+    needs: build-and-test
+    timeout-minutes: 20
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Cache NuGet packages
+      uses: actions/cache@v3
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Publish and validate sample
+      shell: pwsh
+      run: ./scripts/Validate-AotSample.ps1
 
   pack:
     name: Pack NuGet Packages
