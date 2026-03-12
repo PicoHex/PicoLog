@@ -72,9 +72,9 @@ using Pico.DI.Abs;
 using Pico.Logging.Abs;
 using Pico.Logging.DI;
 
-var container = new SvcContainer();
+ISvcContainer container = new SvcContainer();
 
-container.AddLogging(options =>
+Pico.Logging.DI.SvcContainerExtensions.AddLogging(container, options =>
 {
     options.MinLevel = LogLevel.Info;
     options.FilePath = "logs/app.log";
@@ -156,7 +156,7 @@ When shutting down, dispose the resolved factory explicitly so queued log entrie
 You can override the default file target with the optional `filePath` parameter:
 
 ```csharp
-container.AddLogging(LogLevel.Info, "logs/app.log");
+Pico.Logging.DI.SvcContainerExtensions.AddLogging(container, LogLevel.Info, "logs/app.log");
 ```
 
 ### Built-in Formatter
@@ -226,7 +226,7 @@ dotnet build --configuration Release
 ### Run Tests
 
 ```bash
-dotnet test --configuration Release
+dotnet test --solution ./Pico.Logging.slnx --configuration Release
 ```
 
 ## Performance Considerations
@@ -236,6 +236,29 @@ dotnet test --configuration Release
 - Factory disposal flushes all active loggers before disposing sinks.
 - `FileSink` batches writes on its own bounded queue and flushes at batch boundaries or flush-interval boundaries.
 - Choosing `DropOldest`, `DropWrite`, or `Wait` is a throughput-vs-delivery tradeoff, not a correctness bug.
+
+## Fit and Non-Goals
+
+### Strengths
+
+- The core implementation is small and easy to reason about: `LoggerFactory` owns logger and sink lifetimes, while each `InternalLogger` has a single bounded queue and a single background drain task.
+- The project is AOT-friendly and avoids reflection-heavy infrastructure, which makes it a good fit for Native AOT, edge, and IoT workloads.
+- Queue pressure behavior is explicit rather than hidden. Callers can choose between `DropOldest`, `DropWrite`, and `Wait` depending on whether throughput or delivery matters more.
+- The built-in Pico.DI integration stays thin and predictable instead of introducing a large hosting or configuration stack.
+
+### Good Fit
+
+- Small to medium .NET applications that want a lightweight logging core without adopting a larger logging ecosystem.
+- Edge, IoT, desktop, and utility-style workloads where startup cost, binary size, and AOT compatibility matter.
+- Application logging scenarios where best-effort delivery is acceptable and explicit shutdown flushing is enough.
+- Teams that prefer a small set of primitives and are comfortable adding custom sinks or formatters as needed.
+
+### Non-Goals and Weak Spots
+
+- This is not a full observability platform. It does not currently provide structured message templates, enrichers, rolling file management, remote transport sinks, or deep integration with broader telemetry ecosystems.
+- It is not optimized for very high-cardinality logger categories. The current design creates one `InternalLogger` and one background drain task per category.
+- It is not a default fit for audit or compliance logging where silent loss is unacceptable. The default queue mode favors throughput, and stronger delivery guarantees require explicit configuration such as `Wait` or a dedicated sink strategy.
+- Internal operational metrics are still limited. The project can report dropped messages, but it does not yet expose a broader built-in metrics surface for queue depth, sink latency, or flush timing.
 
 ## Extending Pico.Logger
 
