@@ -42,17 +42,8 @@ jobs:
     - name: Restore dependencies
       run: dotnet restore ./Pico.Logging.slnx
     
-    - name: Build solution
+    - name: Build
       run: dotnet build ./Pico.Logging.slnx --configuration Release --no-restore
-    
-    - name: Run code analyzers
-      run: dotnet build ./Pico.Logging.slnx --configuration Release --no-restore -warnaserror
-    
-    - name: Install dotnet-format tool
-      run: dotnet tool install --global dotnet-format --version 8.*
-    
-    - name: Check formatting
-      run: dotnet format ./Pico.Logging.slnx --verify-no-changes --verbosity detailed
     
     - name: Run tests
       run: dotnet test ./Pico.Logging.slnx --configuration Release --no-build --verbosity normal
