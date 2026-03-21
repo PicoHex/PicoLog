@@ -57,18 +57,19 @@ jobs:
     strategy:
       matrix:
         include:
-          # x64 architectures
+          # Validate x64 architectures only for basic libraries
+          # ARM64 validation requires native runners or cross-compilation toolchains
           - runtime: win-x64
             os: windows-latest
           - runtime: linux-x64  
             os: ubuntu-latest
-          # ARM architectures (optional for basic libraries)
-          - runtime: win-arm64
-            os: windows-latest
-          - runtime: linux-arm64
-            os: ubuntu-24.04-arm
-          - runtime: osx-arm64
-            os: macos-latest
+          # ARM architectures (optional - commented out until proper toolchain setup)
+          # - runtime: win-arm64
+          #   os: windows-latest
+          # - runtime: linux-arm64
+          #   os: ubuntu-24.04-arm
+          # - runtime: osx-arm64
+          #   os: macos-latest
 
     steps:
     - name: Checkout repository
@@ -91,16 +92,9 @@ jobs:
       if: matrix.os == 'windows-latest'
       uses: seanmiddleditch/gha-setup-vsdevenv@master
 
-    - name: Install Clang and cross-compilation tools (Linux)
+    - name: Install Clang (Linux)
       if: startsWith(matrix.os, 'ubuntu')
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y clang zlib1g-dev
-        
-        # Install ARM64 cross-compilation tools for linux-arm64 on x64 runners
-        if [[ "${{ matrix.runtime }}" == "linux-arm64" && "${{ matrix.os }}" == "ubuntu-latest" ]]; then
-          sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
-        fi
+      run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
     
     - name: Install Xcode command line tools (macOS)
       if: matrix.os == 'macos-latest'
