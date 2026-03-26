@@ -29,7 +29,6 @@ public sealed class LoggerFactoryTests
                                 Message = $"message-{index}"
                             }
                         )
-                        .AsTask()
             )
             .ToArray();
 
@@ -115,7 +114,6 @@ public sealed class LoggerFactoryTests
                                     Message = $"batch-{index}"
                                 }
                             )
-                            .AsTask()
                 );
 
             await Task.WhenAll(writes);
@@ -538,10 +536,10 @@ public sealed class LoggerFactoryTests
 
         public IReadOnlyCollection<LogEntry> Entries => _entries.ToArray();
 
-        public ValueTask WriteAsync(LogEntry entry, CancellationToken cancellationToken = default)
+        public Task WriteAsync(LogEntry entry, CancellationToken cancellationToken = default)
         {
             _entries.Enqueue(entry);
-            return ValueTask.CompletedTask;
+            return Task.CompletedTask;
         }
 
         public void Dispose() { }
@@ -551,10 +549,10 @@ public sealed class LoggerFactoryTests
 
     private sealed class ThrowingSink : ILogSink
     {
-        public ValueTask WriteAsync(
+        public Task WriteAsync(
             LogEntry entry,
             CancellationToken cancellationToken = default
-        ) => ValueTask.FromException(new InvalidOperationException("Sink failure"));
+        ) => Task.FromException(new InvalidOperationException("Sink failure"));
 
         public void Dispose() { }
 
@@ -569,7 +567,7 @@ public sealed class LoggerFactoryTests
 
         public int WrittenCount => _writtenCount;
 
-        public async ValueTask WriteAsync(
+        public async Task WriteAsync(
             LogEntry entry,
             CancellationToken cancellationToken = default
         )
@@ -591,10 +589,10 @@ public sealed class LoggerFactoryTests
 
     private sealed class ThrowOnDisposeSink : ILogSink
     {
-        public ValueTask WriteAsync(
+        public Task WriteAsync(
             LogEntry entry,
             CancellationToken cancellationToken = default
-        ) => ValueTask.CompletedTask;
+        ) => Task.CompletedTask;
 
         public void Dispose() => throw new InvalidOperationException("dispose failure");
 

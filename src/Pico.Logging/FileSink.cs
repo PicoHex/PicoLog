@@ -50,7 +50,7 @@ public sealed class FileSink : ILogSink
         _processingTask = Task.Run(async () => await ProcessWritesAsync().ConfigureAwait(false));
     }
 
-    public async ValueTask WriteAsync(LogEntry entry, CancellationToken cancellationToken = default)
+    public async Task WriteAsync(LogEntry entry, CancellationToken cancellationToken = default)
     {
         if (Volatile.Read(ref _disposeState) != 0)
             return;

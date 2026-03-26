@@ -1,20 +1,14 @@
 ﻿namespace Pico.Logging;
 
-public sealed class ConsoleSink : ILogSink
+public sealed class ConsoleSink(ILogFormatter formatter, TextWriter? writer = null) : ILogSink
 {
-    private readonly ILogFormatter _formatter;
-    private readonly TextWriter _writer;
+    private readonly ILogFormatter _formatter = formatter ?? throw new ArgumentNullException(nameof(formatter));
+    private readonly TextWriter _writer = writer ?? Console.Out;
 
-    public ConsoleSink(ILogFormatter formatter, TextWriter? writer = null)
-    {
-        _formatter = formatter ?? throw new ArgumentNullException(nameof(formatter));
-        _writer = writer ?? Console.Out;
-    }
-
-    public ValueTask WriteAsync(LogEntry entry, CancellationToken cancellationToken = default)
+    public Task WriteAsync(LogEntry entry, CancellationToken cancellationToken = default)
     {
         _writer.WriteLine(_formatter.Format(entry));
-        return ValueTask.CompletedTask;
+        return Task.CompletedTask;
     }
 
     public void Dispose() { }

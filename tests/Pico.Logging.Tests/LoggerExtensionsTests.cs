@@ -134,7 +134,7 @@ public sealed class LoggerExtensionsTests
             SyncEntries.Add(new RecordedEntry(logLevel, message, exception, default));
         }
 
-        public ValueTask LogAsync(
+        public Task LogAsync(
             LogLevel logLevel,
             string message,
             Exception? exception = null,
@@ -142,7 +142,7 @@ public sealed class LoggerExtensionsTests
         )
         {
             AsyncEntries.Add(new RecordedEntry(logLevel, message, exception, cancellationToken));
-            return ValueTask.CompletedTask;
+            return Task.CompletedTask;
         }
     }
 

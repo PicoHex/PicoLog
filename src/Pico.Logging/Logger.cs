@@ -10,7 +10,7 @@ public sealed class Logger<TCategory>(ILoggerFactory factory) : ILogger<TCategor
     public void Log(LogLevel logLevel, string message, Exception? exception = null) =>
         _innerLogger.Log(logLevel, message, exception);
 
-    public async ValueTask LogAsync(
+    public async Task LogAsync(
         LogLevel logLevel,
         string message,
         Exception? exception = null,

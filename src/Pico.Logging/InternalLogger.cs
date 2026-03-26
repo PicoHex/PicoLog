@@ -62,7 +62,7 @@ internal sealed class InternalLogger : ILogger, IDisposable, IAsyncDisposable
             ReportDroppedMessage();
     }
 
-    public async ValueTask LogAsync(
+    public async Task LogAsync(
         LogLevel logLevel,
         string message,
         Exception? exception = null,

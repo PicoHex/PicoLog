@@ -2,12 +2,8 @@
 
 ISvcContainer container = new SvcContainer();
 
-Pico.Logging
-    .DI
-    .SvcContainerExtensions
-    .AddLogging(
-        container,
-        options =>
+container
+    .AddLogging(options =>
         {
             options.MinLevel = LogLevel.Debug;
             options.UseColoredConsole = true;
