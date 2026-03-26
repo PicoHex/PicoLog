@@ -27,7 +27,13 @@
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
   </PropertyGroup>
 
-  <!-- Disable AOT for netstandard2.0 projects -->
+  <!-- Disable AOT by default for all projects -->
+  <PropertyGroup>
+    <PublishAot Condition="'$(PublishAot)' == ''">false</PublishAot>
+    <IsAotCompatible Condition="'$(IsAotCompatible)' == ''">false</IsAotCompatible>
+  </PropertyGroup>
+  
+  <!-- Explicitly disable AOT for netstandard2.0 projects -->
   <PropertyGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
     <PublishAot>false</PublishAot>
     <IsAotCompatible>false</IsAotCompatible>
