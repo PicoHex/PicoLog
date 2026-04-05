@@ -1,7 +1,7 @@
 name: CI
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -10,77 +10,82 @@ permissions:
 on:
   push:
     branches: [ main ]
-    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
 
 env:
-  DOTNET_VERSION: '10.x'
+  DOTNET_VERSION: '10.0.x'
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
 
 jobs:
-  test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+  validate:
+    name: Validate (${{ matrix.logical-target }})
+    runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 15
     strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0  # Required for SourceLink
-    
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
-    
-    - name: Cache NuGet packages
-      uses: actions/cache@v4
-      with:
-        path: ~/.nuget/packages
-        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-        restore-keys: |
-          ${{ runner.os }}-nuget-
-    
-    - name: Restore dependencies
-      run: dotnet restore -p:UseProjectReferences=true
-    
-    - name: Build
-      run: dotnet build --configuration Release --no-restore -p:UseProjectReferences=true
-    
-    - name: Validate code formatting
-      if: matrix.os == 'ubuntu-latest'
-      run: dotnet format --verify-no-changes
-    
-    - name: Run tests
-      run: dotnet test --configuration Release --no-build --verbosity normal -p:UseProjectReferences=true
-
-  validate-aot-sample:
-    name: AOT Validation (${{ matrix.runtime }})
-    runs-on: ${{ matrix.os }}
-    needs: test
-    timeout-minutes: 20
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/v')
-    strategy:
+      fail-fast: false
       matrix:
         include:
-          # Validate x64 architectures only for basic libraries
-          # ARM64 validation requires native runners or cross-compilation toolchains
-          - runtime: win-x64
-            os: windows-latest
-          - runtime: linux-x64  
-            os: ubuntu-latest
-          # ARM architectures (optional - commented out until proper toolchain setup)
-          # - runtime: win-arm64
-          #   os: windows-latest
-          # - runtime: linux-arm64
-          #   os: ubuntu-24.04-arm
-          # - runtime: osx-arm64
-          #   os: macos-latest
+          - logical-target: win-x64
+            runs-on: windows-latest
+          - logical-target: win-arm64
+            runs-on: windows-latest-arm64
+          - logical-target: linux-x64
+            runs-on: ubuntu-latest
+          - logical-target: linux-arm64
+            runs-on: ubuntu-latest-arm64
+          - logical-target: osx-arm64
+            runs-on: macos-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Show logical target
+      run: dotnet --info
+    
+    - name: Restore dependencies
+      run: dotnet restore ./PicoLog.slnx -p:UseProjectReferences=true
+    
+    - name: Build
+      run: dotnet build ./PicoLog.slnx --configuration Release --no-restore -p:UseProjectReferences=true
+    
+    - name: Validate code formatting
+      if: matrix.logical-target == 'linux-x64'
+      run: dotnet format ./PicoLog.slnx --verify-no-changes --no-restore
+    
+    - name: Run tests
+      run: dotnet test --project ./tests/PicoLog.Tests/PicoLog.Tests.csproj --configuration Release --no-build --verbosity normal -p:UseProjectReferences=true
+
+  aot-validation:
+    name: AOT Validation (${{ matrix.logical-target }})
+    runs-on: ${{ matrix.runs-on }}
+    needs: validate
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - logical-target: win-x64
+            runs-on: windows-latest
+            rid: win-x64
+          - logical-target: win-arm64
+            runs-on: windows-latest-arm64
+            rid: win-arm64
+          - logical-target: linux-x64
+            runs-on: ubuntu-latest
+            rid: linux-x64
+          - logical-target: linux-arm64
+            runs-on: ubuntu-latest-arm64
+            rid: linux-arm64
+          - logical-target: osx-arm64
+            runs-on: macos-latest
+            rid: osx-arm64
 
     steps:
     - name: Checkout repository
@@ -91,142 +96,10 @@ jobs:
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
 
-    - name: Cache NuGet packages
-      uses: actions/cache@v4
-      with:
-        path: ~/.nuget/packages
-        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-        restore-keys: |
-          ${{ runner.os }}-nuget-
-
-    - name: Install platform-specific SDK
-      if: matrix.os == 'windows-latest'
-      uses: seanmiddleditch/gha-setup-vsdevenv@master
-
     - name: Install Clang (Linux)
-      if: startsWith(matrix.os, 'ubuntu')
+      if: startsWith(matrix.rid, 'linux-')
       run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
-    
-    - name: Install Xcode command line tools (macOS)
-      if: matrix.os == 'macos-latest'
-      run: xcode-select --install || true
 
     - name: Publish and validate sample
       shell: pwsh
-      run: ./scripts/Validate-AotSample.ps1 -RuntimeIdentifier "${{ matrix.runtime }}"
-
-  pack:
-    name: Pack NuGet Packages
-    runs-on: ubuntu-latest
-    needs:
-    - test
-    if: startsWith(github.ref, 'refs/tags/v')
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-    
-    - name: Extract version from tag
-      id: version
-      run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-    
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
-    
-    - name: Cache NuGet packages
-      uses: actions/cache@v4
-      with:
-        path: ~/.nuget/packages
-        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-        restore-keys: |
-          ${{ runner.os }}-nuget-
-    
-    - name: Restore dependencies
-      run: dotnet restore
-    
-    - name: Build with version
-      run: dotnet build --configuration Release --no-restore -p:Version=${{ steps.version.outputs.VERSION }} -p:UseProjectReferences=true
-    
-    - name: Pack all packable projects
-      run: |
-        # Clean output directory
-        rm -rf ./nupkg
-        mkdir -p ./nupkg
-        
-        # Define packing order to ensure dependencies are built first
-        # 1. PicoLog.Abs (abstraction layer, no dependencies)
-        # 2. PicoLog (depends on Abs)
-        # 3. PicoLog.DI (depends on PicoLog and external PicoDI)
-        
-        # Pack PicoLog.Abs first
-        echo "Packing PicoLog.Abs..."
-        dotnet pack ./src/PicoLog.Abs/PicoLog.Abs.csproj \
-          --configuration Release \
-          --output ./nupkg \
-          -p:Version=${{ steps.version.outputs.VERSION }} \
-          -p:UseProjectReferences=false
-        
-        # Pack PicoLog (depends on PicoLog.Abs)
-        echo "Packing PicoLog..."
-        dotnet pack ./src/PicoLog/PicoLog.csproj \
-          --configuration Release \
-          --output ./nupkg \
-          -p:Version=${{ steps.version.outputs.VERSION }} \
-          -p:UseProjectReferences=false \
-          -p:RestoreAdditionalProjectSources=./nupkg
-        
-        # Pack PicoLog.DI (depends on PicoLog and external PicoDI)
-        echo "Packing PicoLog.DI..."
-        dotnet pack ./src/PicoLog.DI/PicoLog.DI.csproj \
-          --configuration Release \
-          --output ./nupkg \
-          -p:Version=${{ steps.version.outputs.VERSION }} \
-          -p:UseProjectReferences=false \
-          -p:RestoreAdditionalProjectSources=./nupkg
-        
-        # Verify all packages were created
-        echo "Created packages:"
-        ls -la ./nupkg/
-    
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: nupkg
-        path: |
-          ./nupkg/*.nupkg
-          ./nupkg/*.snupkg
-
-  publish:
-    name: Publish to NuGet
-    runs-on: ubuntu-latest
-    needs: pack
-    if: startsWith(github.ref, 'refs/tags/v')
-    environment: release
-    
-    steps:
-    - name: Download artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: nupkg
-    
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
-    
-    - name: Publish to NuGet.org
-      run: |
-        for file in *.nupkg
-        do
-          if [[ $file != *.symbols.* ]] && [[ $file != *.snupkg ]]; then
-            echo "Publishing $file"
-            dotnet nuget push $file \
-              --api-key ${{ secrets.NUGET_API_KEY }} \
-              --source https://api.nuget.org/v3/index.json \
-              --skip-duplicate
-          fi
-        done
+      run: ./scripts/Validate-AotSample.ps1 -RuntimeIdentifier "${{ matrix.rid }}"

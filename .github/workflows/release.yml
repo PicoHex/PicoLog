@@ -1,0 +1,188 @@
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+
+jobs:
+  validate:
+    name: Release Validation (${{ matrix.logical-target }})
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - logical-target: win-x64
+            runs-on: windows-latest
+          - logical-target: win-arm64
+            runs-on: windows-latest-arm64
+          - logical-target: linux-x64
+            runs-on: ubuntu-latest
+          - logical-target: linux-arm64
+            runs-on: ubuntu-latest-arm64
+          - logical-target: osx-arm64
+            runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore dependencies
+        run: dotnet restore ./PicoLog.slnx -p:UseProjectReferences=true
+
+      - name: Build
+        run: dotnet build ./PicoLog.slnx --configuration Release --no-restore -p:UseProjectReferences=true
+
+      - name: Run tests
+        run: dotnet test --project ./tests/PicoLog.Tests/PicoLog.Tests.csproj --configuration Release --no-build --verbosity normal -p:UseProjectReferences=true
+
+  aot-validation:
+    name: Release AOT Validation (${{ matrix.logical-target }})
+    runs-on: ${{ matrix.runs-on }}
+    needs: validate
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - logical-target: win-x64
+            runs-on: windows-latest
+            rid: win-x64
+          - logical-target: win-arm64
+            runs-on: windows-latest-arm64
+            rid: win-arm64
+          - logical-target: linux-x64
+            runs-on: ubuntu-latest
+            rid: linux-x64
+          - logical-target: linux-arm64
+            runs-on: ubuntu-latest-arm64
+            rid: linux-arm64
+          - logical-target: osx-arm64
+            runs-on: macos-latest
+            rid: osx-arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Install Clang (Linux)
+        if: startsWith(matrix.rid, 'linux-')
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+
+      - name: Publish and validate sample
+        shell: pwsh
+        run: ./scripts/Validate-AotSample.ps1 -RuntimeIdentifier "${{ matrix.rid }}"
+
+  pack:
+    name: Pack NuGet packages
+    runs-on: ubuntu-latest
+    needs:
+      - validate
+      - aot-validation
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore dependencies
+        run: dotnet restore ./PicoLog.slnx -p:UseProjectReferences=true
+
+      - name: Build with release version
+        run: dotnet build ./PicoLog.slnx --configuration Release --no-restore -p:Version=${{ steps.version.outputs.version }} -p:UseProjectReferences=true
+
+      - name: Pack libraries in dependency order
+        shell: bash
+        run: |
+          rm -rf ./artifacts/nupkg
+          mkdir -p ./artifacts/nupkg
+
+          dotnet pack ./src/PicoLog.Abs/PicoLog.Abs.csproj \
+            --configuration Release \
+            --output ./artifacts/nupkg \
+            -p:Version=${{ steps.version.outputs.version }} \
+            -p:UseProjectReferences=false
+
+          dotnet pack ./src/PicoLog/PicoLog.csproj \
+            --configuration Release \
+            --output ./artifacts/nupkg \
+            -p:Version=${{ steps.version.outputs.version }} \
+            -p:UseProjectReferences=false \
+            -p:RestoreAdditionalProjectSources=./artifacts/nupkg
+
+          dotnet pack ./src/PicoLog.DI/PicoLog.DI.csproj \
+            --configuration Release \
+            --output ./artifacts/nupkg \
+            -p:Version=${{ steps.version.outputs.version }} \
+            -p:UseProjectReferences=false \
+            -p:RestoreAdditionalProjectSources=./artifacts/nupkg
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: |
+            ./artifacts/nupkg/*.nupkg
+            ./artifacts/nupkg/*.snupkg
+
+  publish:
+    name: Publish to NuGet
+    runs-on: ubuntu-latest
+    needs: pack
+    environment: release
+
+    steps:
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: nupkg
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Publish packages
+        shell: bash
+        run: |
+          for file in *.nupkg; do
+            if [[ "$file" != *.snupkg ]] && [[ "$file" != *.symbols.nupkg ]]; then
+              dotnet nuget push "$file" \
+                --api-key "${{ secrets.NUGET_API_KEY }}" \
+                --source https://api.nuget.org/v3/index.json \
+                --skip-duplicate
+            fi
+          done
