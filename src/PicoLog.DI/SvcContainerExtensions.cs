@@ -30,14 +30,16 @@ public static class SvcContainerExtensions
     public static PicoDI.Abs.ISvcContainer AddLogging(
         this PicoDI.Abs.ISvcContainer container,
         LogLevel minLevel = LogLevel.Debug,
-        string filePath = "logs/test.log"
+        string? filePath = null
     ) =>
         AddLogging(
             container,
             options =>
             {
                 options.MinLevel = minLevel;
-                options.FilePath = filePath;
+
+                if (filePath is not null)
+                    options.FilePath = filePath;
             }
         );
 
@@ -46,14 +48,14 @@ public static class SvcContainerExtensions
         ArgumentNullException.ThrowIfNull(options);
 
         var formatter = new ConsoleFormatter();
-        options.Factory.MinLevel = options.MinLevel;
         ILogSink consoleSink = options.UseColoredConsole
             ? new ColoredConsoleSink(formatter)
             : new ConsoleSink(formatter);
+        List<ILogSink> sinks = [consoleSink];
 
-        return new LoggerFactory(
-            [consoleSink, new FileSink(formatter, options.File)],
-            options.Factory
-        );
+        if (options.EnableFileSink)
+            sinks.Add(new FileSink(formatter, options.File));
+
+        return new LoggerFactory(sinks, options.Factory);
     }
 }
