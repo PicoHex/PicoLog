@@ -11,7 +11,7 @@ A lightweight, AOT-friendly logging framework for .NET edge and IoT workloads. T
 - **AOT compatibility**: targets `net10.0` and avoids reflection-heavy infrastructure
 - **Bounded async pipeline**: loggers enqueue entries into a bounded channel and write to sinks on a background task
 - **Minimal surface area**: only a few core abstractions need to be implemented to extend the system
-- **PicoDI integration**: built-in registrations for the logger factory and typed loggers using default console and file sinks
+- **PicoDI integration**: built-in registrations for the logger factory and typed loggers with console logging by default and optional file logging when a file path is configured
 - **Scope support**: nested scopes flow through `AsyncLocal` and are attached to each `LogEntry`
 
 ## Project Structure
@@ -141,7 +141,7 @@ await using var loggerFactory = new LoggerFactory(sinks, options);
 
 - `ConsoleSink` writes plain formatted entries to standard output.
 - `ColoredConsoleSink` serializes color changes so console state does not leak across concurrent writes.
-- `FileSink` batches UTF-8 file writes on a background queue before flushing to disk. `AddLogging()` creates the sinks inside the logger factory so the factory remains the single owner of their lifetime.
+- `FileSink` batches UTF-8 file writes on a background queue before flushing to disk. `AddLogging()` creates configured sinks inside the logger factory so the factory remains the single owner of their lifetime.
 
 ### PicoDI Defaults
 
@@ -149,14 +149,23 @@ await using var loggerFactory = new LoggerFactory(sinks, options);
 
 - a singleton `ILoggerFactory`
 - typed `ILogger<T>` adapters
-- default console and file sinks owned by the factory
+- a console sink by default
+- an optional file sink when `FilePath` is configured
 
 When shutting down, dispose the resolved factory explicitly so queued log entries are flushed before process exit.
 
-You can override the default file target with the optional `filePath` parameter:
+You can enable file logging either through the optional `filePath` parameter or by setting `options.FilePath` in the configure overload:
 
 ```csharp
 PicoLog.DI.SvcContainerExtensions.AddLogging(container, LogLevel.Info, "logs/app.log");
+```
+
+```csharp
+PicoLog.DI.SvcContainerExtensions.AddLogging(container, options =>
+{
+    options.MinLevel = LogLevel.Info;
+    options.FilePath = "logs/app.log";
+});
 ```
 
 ### Built-in Formatter
