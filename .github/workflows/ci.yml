@@ -29,13 +29,13 @@ jobs:
           - logical-target: win-x64
             runs-on: windows-latest
           - logical-target: win-arm64
-            runs-on: windows-latest-arm64
+            runs-on: windows-11-arm64
           - logical-target: linux-x64
             runs-on: ubuntu-latest
           - logical-target: linux-arm64
-            runs-on: ubuntu-latest-arm64
+            runs-on: ubuntu-24.04-arm64
           - logical-target: osx-arm64
-            runs-on: macos-latest
+            runs-on: macos-15-arm64
     
     steps:
     - name: Checkout repository
@@ -75,16 +75,16 @@ jobs:
             runs-on: windows-latest
             rid: win-x64
           - logical-target: win-arm64
-            runs-on: windows-latest-arm64
+            runs-on: windows-11-arm64
             rid: win-arm64
           - logical-target: linux-x64
             runs-on: ubuntu-latest
             rid: linux-x64
           - logical-target: linux-arm64
-            runs-on: ubuntu-latest-arm64
+            runs-on: ubuntu-24.04-arm64
             rid: linux-arm64
           - logical-target: osx-arm64
-            runs-on: macos-latest
+            runs-on: macos-15-arm64
             rid: osx-arm64
 
     steps:
