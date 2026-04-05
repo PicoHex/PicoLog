@@ -87,7 +87,7 @@ public sealed class LoggerFactory : ILoggerFactory, IDisposable, IAsyncDisposabl
             }
             catch (Exception ex)
             {
-                (exceptions ??=  []).Add(ex);
+                (exceptions ??= []).Add(ex);
             }
         }
 
@@ -102,7 +102,7 @@ public sealed class LoggerFactory : ILoggerFactory, IDisposable, IAsyncDisposabl
             }
             catch (Exception ex)
             {
-                (exceptions ??=  []).Add(ex);
+                (exceptions ??= []).Add(ex);
             }
         }
 
