@@ -175,6 +175,61 @@ public sealed class LoggerFactoryTests
     }
 
     [Test]
+    public async Task StructuredLogger_PreservesProperties_And_FormatterRendersThem()
+    {
+        var sink = new CollectingSink();
+        await using var factory = new LoggerFactory([sink]);
+        var logger = factory.CreateLogger("Tests.Category");
+        IReadOnlyList<KeyValuePair<string, object?>> properties =
+        [
+            new("tenant", "alpha"),
+            new("attempt", 3),
+            new("nullable", null)
+        ];
+
+        logger.LogStructured(LogLevel.Warning, "structured-message", properties);
+        await factory.DisposeAsync();
+
+        var entry = sink.Entries.Single();
+        await Assert.That(entry.Properties).IsNotNull();
+        await Assert.That(entry.Properties!).Count().IsEqualTo(3);
+        await Assert.That(entry.Properties![0].Key).IsEqualTo("tenant");
+        await Assert.That(entry.Properties[0].Value).IsEqualTo("alpha");
+        await Assert.That(entry.Properties[1].Key).IsEqualTo("attempt");
+        await Assert.That(entry.Properties[1].Value).IsEqualTo(3);
+        await Assert.That(entry.Properties[2].Key).IsEqualTo("nullable");
+        await Assert.That(entry.Properties[2].Value is null).IsTrue();
+
+        var rendered = new ConsoleFormatter().Format(entry);
+        await Assert.That(rendered).Contains("structured-message");
+        await Assert.That(rendered).Contains("{tenant=\"alpha\", attempt=3, nullable=null}");
+    }
+
+    [Test]
+    public async Task StructuredLogger_CopiesProperties_On_EntryCreation()
+    {
+        var sink = new CollectingSink();
+        await using var factory = new LoggerFactory([sink]);
+        var logger = factory.CreateLogger("Tests.Category");
+        var properties = new List<KeyValuePair<string, object?>>
+        {
+            new("tenant", "alpha")
+        };
+
+        logger.LogStructured(LogLevel.Info, "snapshot", properties);
+        properties[0] = new KeyValuePair<string, object?>("tenant", "mutated");
+        properties.Add(new KeyValuePair<string, object?>("attempt", 2));
+
+        await factory.DisposeAsync();
+
+        var entry = sink.Entries.Single();
+        await Assert.That(entry.Properties).IsNotNull();
+        await Assert.That(entry.Properties!).Count().IsEqualTo(1);
+        await Assert.That(entry.Properties[0].Key).IsEqualTo("tenant");
+        await Assert.That(entry.Properties[0].Value).IsEqualTo("alpha");
+    }
+
+    [Test]
     public async Task DisposeAsync_FlushesQueuedEntriesAndScopes()
     {
         var sink = new CollectingSink();
@@ -317,14 +372,15 @@ public sealed class LoggerFactoryTests
         var logger = factory.CreateLogger("Tests.Category");
 
         logger.Info("first");
+        await sink.WriteStarted;
         logger.Info("second");
         logger.Info("third");
 
-        await Task.Delay(50);
         sink.Release();
         await factory.DisposeAsync();
 
-        await Assert.That(reportedDropCount).IsEqualTo(2);
+        await Assert.That(reportedDropCount).IsEqualTo(1);
+        await Assert.That(sink.WrittenCount).IsEqualTo(2);
     }
 
     [Test]
@@ -343,6 +399,7 @@ public sealed class LoggerFactoryTests
         var logger = factory.CreateLogger("Tests.Category");
 
         logger.Info("first");
+        await sink.WriteStarted;
         logger.Info("second");
 
         var thirdWrite = Task.Run(() => logger.Info("third"));
@@ -604,6 +661,101 @@ public sealed class LoggerFactoryTests
         await Assert.That(sink.DisposeCallCount).IsEqualTo(1);
     }
 
+    [Test]
+    public async Task DisposeAsync_RejectsWrites_After_Shutdown_Begins()
+    {
+        var sink = new CoordinatedDisposalSink();
+        await using var factory = new LoggerFactory([sink]);
+        var logger = factory.CreateLogger("Tests.Category");
+
+        await logger.InfoAsync("before-dispose");
+        await sink.WriteStarted;
+
+        var disposeTask = factory.DisposeAsync().AsTask();
+        await Task.Delay(50);
+
+        logger.Warning("after-dispose-sync");
+        await logger.ErrorAsync("after-dispose-async");
+
+        sink.ReleaseWrite();
+        await disposeTask;
+
+        var messages = sink.Entries.Select(entry => entry.Message).ToArray();
+        await Assert.That(messages).Count().IsEqualTo(1);
+        await Assert.That(messages[0]).IsEqualTo("before-dispose");
+    }
+
+    [Test]
+    public async Task Metrics_Record_RejectedWrites_DroppedWrites_SinkFailures_And_ShutdownDuration()
+    {
+        using var listener = new MeterListener();
+        var measurements = new ConcurrentDictionary<string, ConcurrentQueue<double>>(
+            StringComparer.Ordinal
+        );
+
+        listener.InstrumentPublished = (instrument, meterListener) =>
+        {
+            if (instrument.Meter.Name == PicoLogMetrics.MeterName)
+                meterListener.EnableMeasurementEvents(instrument);
+        };
+
+        listener.SetMeasurementEventCallback<long>(
+            (instrument, measurement, _, _) =>
+                measurements.GetOrAdd(instrument.Name, _ => new ConcurrentQueue<double>())
+                    .Enqueue(measurement)
+        );
+        listener.SetMeasurementEventCallback<double>(
+            (instrument, measurement, _, _) =>
+                measurements.GetOrAdd(instrument.Name, _ => new ConcurrentQueue<double>())
+                    .Enqueue(measurement)
+        );
+        listener.Start();
+
+        var sink = new BlockingSink();
+        var options = new LoggerFactoryOptions
+        {
+            QueueCapacity = 1,
+            QueueFullMode = LogQueueFullMode.DropWrite
+        };
+        await using var dropFactory = new LoggerFactory([sink], options);
+        var dropLogger = dropFactory.CreateLogger("Tests.Drop");
+
+        dropLogger.Info("first");
+        await sink.WriteStarted;
+        dropLogger.Info("second");
+        listener.RecordObservableInstruments();
+        dropLogger.Info("third");
+        sink.Release();
+        await dropFactory.DisposeAsync();
+
+        var collectingSink = new CollectingSink();
+        await using var failureFactory = new LoggerFactory([new ThrowingSink(), collectingSink]);
+        var failureLogger = failureFactory.CreateLogger("Tests.Failures");
+        await failureLogger.WarningAsync("payload");
+        await failureFactory.DisposeAsync();
+
+        var coordinatedSink = new CoordinatedDisposalSink();
+        await using var shutdownFactory = new LoggerFactory([coordinatedSink]);
+        var shutdownLogger = shutdownFactory.CreateLogger("Tests.Shutdown");
+        await shutdownLogger.InfoAsync("before-shutdown");
+        await coordinatedSink.WriteStarted;
+
+        var shutdownDisposeTask = shutdownFactory.DisposeAsync().AsTask();
+        await Task.Delay(50);
+        shutdownLogger.Info("after-shutdown");
+        coordinatedSink.ReleaseWrite();
+        await shutdownDisposeTask;
+        listener.RecordObservableInstruments();
+
+        await AssertMeasurementAtLeastAsync(measurements, PicoLogMetrics.EntriesEnqueuedName, 4);
+        await AssertMeasurementAtLeastAsync(measurements, PicoLogMetrics.EntriesDroppedName, 1);
+        await AssertMeasurementAtLeastAsync(measurements, PicoLogMetrics.SinkFailuresName, 1);
+        await AssertMeasurementAtLeastAsync(measurements, PicoLogMetrics.ShutdownRejectedWritesName, 1);
+        await AssertMeasurementAtLeastAsync(measurements, PicoLogMetrics.ShutdownDrainDurationName, 0);
+        await AssertMeasurementContainsAsync(measurements, PicoLogMetrics.QueuedEntriesName, 1);
+        await AssertAllMeasurementsAtLeastAsync(measurements, PicoLogMetrics.QueuedEntriesName, 0);
+    }
+
     private sealed class CollectingSink : ILogSink
     {
         private readonly ConcurrentQueue<LogEntry> _entries = [];
@@ -633,15 +785,21 @@ public sealed class LoggerFactoryTests
 
     private sealed class BlockingSink : ILogSink
     {
+        private readonly TaskCompletionSource _writeStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _release =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _writtenCount;
 
         public int WrittenCount => _writtenCount;
 
+        public Task WriteStarted => _writeStarted.Task;
+
         public async Task WriteAsync(LogEntry entry, CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _writtenCount);
+            _writeStarted.TrySetResult();
+
             await _release.Task.WaitAsync(cancellationToken);
         }
 
@@ -669,11 +827,14 @@ public sealed class LoggerFactoryTests
 
     private sealed class CoordinatedDisposalSink : ILogSink
     {
+        private readonly ConcurrentQueue<LogEntry> _entries = [];
         private readonly TaskCompletionSource _writeStarted =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _release =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _disposeCallCount;
+
+        public IReadOnlyCollection<LogEntry> Entries => _entries.ToArray();
 
         public Task WriteStarted => _writeStarted.Task;
 
@@ -681,6 +842,7 @@ public sealed class LoggerFactoryTests
 
         public async Task WriteAsync(LogEntry entry, CancellationToken cancellationToken = default)
         {
+            _entries.Enqueue(entry);
             _writeStarted.TrySetResult();
             await _release.Task.WaitAsync(cancellationToken);
         }
@@ -700,6 +862,38 @@ public sealed class LoggerFactoryTests
     {
         public string Format(LogEntry entry) =>
             $"{entry.Level}|{entry.Message}|{entry.Exception?.Message}";
+    }
+
+    private static async Task AssertMeasurementAtLeastAsync(
+        ConcurrentDictionary<string, ConcurrentQueue<double>> measurements,
+        string instrumentName,
+        double minimumValue
+    )
+    {
+        await Assert.That(measurements.TryGetValue(instrumentName, out var values)).IsTrue();
+        await Assert.That(values!).IsNotEmpty();
+        await Assert.That(values!.Sum()).IsGreaterThanOrEqualTo(minimumValue);
+    }
+
+    private static async Task AssertMeasurementContainsAsync(
+        ConcurrentDictionary<string, ConcurrentQueue<double>> measurements,
+        string instrumentName,
+        double expectedValue
+    )
+    {
+        await Assert.That(measurements.TryGetValue(instrumentName, out var values)).IsTrue();
+        await Assert.That(values!).Contains(expectedValue);
+    }
+
+    private static async Task AssertAllMeasurementsAtLeastAsync(
+        ConcurrentDictionary<string, ConcurrentQueue<double>> measurements,
+        string instrumentName,
+        double minimumValue
+    )
+    {
+        await Assert.That(measurements.TryGetValue(instrumentName, out var values)).IsTrue();
+        await Assert.That(values!).IsNotEmpty();
+        await Assert.That(values!.All(value => value >= minimumValue)).IsTrue();
     }
 
     private static async Task WaitForEntriesAsync(CollectingSink sink, int expectedCount)

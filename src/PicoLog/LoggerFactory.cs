@@ -34,6 +34,8 @@ public sealed class LoggerFactory : ILoggerFactory, IDisposable, IAsyncDisposabl
         return _loggers.GetOrAdd(categoryName, name => new InternalLogger(name, _sinks, this));
     }
 
+    internal bool IsAcceptingWrites => Volatile.Read(ref _disposeState) == 0;
+
     internal bool IsEnabled(LogLevel logLevel) => MinLevel != LogLevel.None && logLevel <= MinLevel;
 
     internal ILogScope BeginScope<TState>(TState state)
@@ -49,6 +51,7 @@ public sealed class LoggerFactory : ILoggerFactory, IDisposable, IAsyncDisposabl
 
     internal void ReportDroppedMessages(string categoryName, long droppedCount)
     {
+        PicoLogMetrics.RecordDroppedEntry();
         _options.OnMessagesDropped?.Invoke(categoryName, droppedCount);
 
         if (_options.OnMessagesDropped is not null)
@@ -60,6 +63,12 @@ public sealed class LoggerFactory : ILoggerFactory, IDisposable, IAsyncDisposabl
             );
     }
 
+    internal void RecordEntryAccepted() => PicoLogMetrics.RecordEntryAccepted();
+
+    internal void RecordSinkFailure() => PicoLogMetrics.RecordSinkFailure();
+
+    internal void RecordRejectedAfterShutdown() => PicoLogMetrics.RecordRejectedAfterShutdown();
+
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 
     public async ValueTask DisposeAsync()
@@ -68,6 +77,7 @@ public sealed class LoggerFactory : ILoggerFactory, IDisposable, IAsyncDisposabl
             return;
 
         List<Exception>? exceptions = null;
+        var drainStopwatch = Stopwatch.StartNew();
 
         foreach (var logger in _loggers.Values)
         {
@@ -82,6 +92,7 @@ public sealed class LoggerFactory : ILoggerFactory, IDisposable, IAsyncDisposabl
         }
 
         _loggers.Clear();
+        PicoLogMetrics.RecordShutdownDrainDuration(drainStopwatch.Elapsed);
 
         foreach (var sink in _sinks)
         {

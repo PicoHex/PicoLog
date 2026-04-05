@@ -1,7 +1,14 @@
 namespace PicoLog;
 
-internal sealed class InternalLogger : ILogger, IDisposable, IAsyncDisposable
+internal sealed class InternalLogger : IStructuredLogger, IDisposable, IAsyncDisposable
 {
+    private enum LogWriteResult
+    {
+        Accepted,
+        Dropped,
+        RejectedAfterShutdown
+    }
+
     private readonly string _categoryName;
     private readonly Channel<LogEntry> _channel;
     private readonly Task _processingTask;
@@ -9,6 +16,7 @@ internal sealed class InternalLogger : ILogger, IDisposable, IAsyncDisposable
     private readonly LoggerFactory _factory;
     private readonly ILogSink? _fallbackSink;
     private readonly int _queueCapacity;
+    private readonly int _queueDepthProviderId;
     private int _disposeState;
     private int _queuedEntries;
     private long _droppedEntries;
@@ -35,49 +43,70 @@ internal sealed class InternalLogger : ILogger, IDisposable, IAsyncDisposable
         );
         _processingTask = Task.Run(async () => await ProcessEntries().ConfigureAwait(false));
         _fallbackSink = _sinksArray.FirstOrDefault(p => p is ConsoleSink or ColoredConsoleSink);
+        _queueDepthProviderId = PicoLogMetrics.RegisterQueueDepthProvider(GetQueuedEntryCount);
     }
 
     public IDisposable BeginScope<TState>(TState state)
         where TState : notnull
     {
-        if (_disposeState != 0)
+        if (_disposeState != 0 || !_factory.IsAcceptingWrites)
             return LoggerScopeProvider.Empty;
 
         return _factory.BeginScope(state);
     }
 
-    public void Log(LogLevel logLevel, string message, Exception? exception)
-    {
-        if (_disposeState != 0 || !_factory.IsEnabled(logLevel))
-            return;
+    public void Log(LogLevel logLevel, string message, Exception? exception = null) =>
+        Write(logLevel, message, properties: null, exception);
 
-        var entry = CreateEntry(logLevel, message, exception);
+    public void LogStructured(
+        LogLevel logLevel,
+        string message,
+        IReadOnlyList<KeyValuePair<string, object?>>? properties = null,
+        Exception? exception = null
+    ) => Write(logLevel, message, properties, exception);
 
-        if (!TryEnqueueSync(entry))
-            ReportDroppedMessage();
-    }
-
-    public async Task LogAsync(
+    public Task LogAsync(
         LogLevel logLevel,
         string message,
         Exception? exception = null,
         CancellationToken cancellationToken = default
+    ) => WriteAsync(logLevel, message, properties: null, exception, cancellationToken);
+
+    public Task LogStructuredAsync(
+        LogLevel logLevel,
+        string message,
+        IReadOnlyList<KeyValuePair<string, object?>>? properties = null,
+        Exception? exception = null,
+        CancellationToken cancellationToken = default
+    ) => WriteAsync(logLevel, message, properties, exception, cancellationToken);
+
+    private void Write(
+        LogLevel logLevel,
+        string message,
+        IReadOnlyList<KeyValuePair<string, object?>>? properties,
+        Exception? exception
     )
     {
-        if (_disposeState != 0 || !_factory.IsEnabled(logLevel))
+        if (!CanAcceptWrite(logLevel))
             return;
 
-        var entry = CreateEntry(logLevel, message, exception);
+        var entry = CreateEntry(logLevel, message, exception, properties);
+        HandleWriteResult(TryEnqueueSync(entry));
+    }
 
-        try
-        {
-            await _channel.Writer.WriteAsync(entry, cancellationToken).ConfigureAwait(false);
-            Interlocked.Increment(ref _queuedEntries);
-        }
-        catch (ChannelClosedException)
-        {
-            // Ignore writes that race with shutdown.
-        }
+    private async Task WriteAsync(
+        LogLevel logLevel,
+        string message,
+        IReadOnlyList<KeyValuePair<string, object?>>? properties,
+        Exception? exception,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!CanAcceptWrite(logLevel))
+            return;
+
+        var entry = CreateEntry(logLevel, message, exception, properties);
+        HandleWriteResult(await TryEnqueueAsync(entry, cancellationToken).ConfigureAwait(false));
     }
 
     private async ValueTask ProcessEntries()
@@ -94,13 +123,38 @@ internal sealed class InternalLogger : ILogger, IDisposable, IAsyncDisposable
                 }
                 catch (Exception ex)
                 {
+                    _factory.RecordSinkFailure();
                     await LogSinkErrorAsync(sink, ex, entry).ConfigureAwait(false);
                 }
             }
         }
     }
 
-    private LogEntry CreateEntry(LogLevel logLevel, string message, Exception? exception) =>
+    private bool CanAcceptWrite(LogLevel logLevel)
+    {
+        if (_disposeState != 0 || !_factory.IsAcceptingWrites)
+        {
+            _factory.RecordRejectedAfterShutdown();
+            return false;
+        }
+
+        return _factory.IsEnabled(logLevel);
+    }
+
+    private void HandleWriteResult(LogWriteResult result)
+    {
+        if (result == LogWriteResult.Dropped)
+            ReportDroppedMessage();
+        else if (result == LogWriteResult.RejectedAfterShutdown)
+            _factory.RecordRejectedAfterShutdown();
+    }
+
+    private LogEntry CreateEntry(
+        LogLevel logLevel,
+        string message,
+        Exception? exception,
+        IReadOnlyList<KeyValuePair<string, object?>>? properties
+    ) =>
         new()
         {
             Timestamp = DateTimeOffset.Now,
@@ -108,10 +162,26 @@ internal sealed class InternalLogger : ILogger, IDisposable, IAsyncDisposable
             Category = _categoryName,
             Message = message,
             Exception = exception,
-            Scopes = _factory.CaptureScopes()
+            Scopes = _factory.CaptureScopes(),
+            Properties = SnapshotProperties(properties)
         };
 
-    private bool TryEnqueueSync(LogEntry entry) =>
+    private static IReadOnlyList<KeyValuePair<string, object?>>? SnapshotProperties(
+        IReadOnlyList<KeyValuePair<string, object?>>? properties
+    )
+    {
+        if (properties is not { Count: > 0 })
+            return null;
+
+        var snapshot = new KeyValuePair<string, object?>[properties.Count];
+
+        for (var index = 0; index < properties.Count; index++)
+            snapshot[index] = properties[index];
+
+        return snapshot;
+    }
+
+    private LogWriteResult TryEnqueueSync(LogEntry entry) =>
         _factory.QueueFullMode switch
         {
             LogQueueFullMode.Wait => TryEnqueueSyncWithWait(entry),
@@ -119,57 +189,111 @@ internal sealed class InternalLogger : ILogger, IDisposable, IAsyncDisposable
             _ => TryEnqueueSyncDropOldest(entry)
         };
 
-    private bool TryEnqueueSyncDropOldest(LogEntry entry)
+    private Task<LogWriteResult> TryEnqueueAsync(LogEntry entry, CancellationToken cancellationToken) =>
+        _factory.QueueFullMode switch
+        {
+            LogQueueFullMode.Wait => TryEnqueueAsyncWithWait(entry, cancellationToken),
+            LogQueueFullMode.DropWrite => Task.FromResult(TryEnqueueSyncDropWrite(entry)),
+            _ => Task.FromResult(TryEnqueueSyncDropOldest(entry))
+        };
+
+    private LogWriteResult TryEnqueueSyncDropOldest(LogEntry entry)
     {
         var wasAtCapacity = Volatile.Read(ref _queuedEntries) >= _queueCapacity;
 
         if (!_channel.Writer.TryWrite(entry))
-            return false;
+            return DetermineFailedWriteResult();
+
+        _factory.RecordEntryAccepted();
 
         if (wasAtCapacity)
-        {
-            ReportDroppedMessage();
-            return true;
-        }
+            return LogWriteResult.Dropped;
 
         Interlocked.Increment(ref _queuedEntries);
-        return true;
+        return LogWriteResult.Accepted;
     }
 
-    private bool TryEnqueueSyncDropWrite(LogEntry entry)
+    private LogWriteResult TryEnqueueSyncDropWrite(LogEntry entry)
     {
         if (Volatile.Read(ref _queuedEntries) >= _queueCapacity)
-            return false;
+            return LogWriteResult.Dropped;
 
         if (!_channel.Writer.TryWrite(entry))
-            return false;
+            return DetermineFailedWriteResult();
 
         Interlocked.Increment(ref _queuedEntries);
-        return true;
+        _factory.RecordEntryAccepted();
+        return LogWriteResult.Accepted;
     }
 
-    private bool TryEnqueueSyncWithWait(LogEntry entry)
+    private LogWriteResult TryEnqueueSyncWithWait(LogEntry entry)
     {
+        var startTimestamp = Stopwatch.GetTimestamp();
+
         try
         {
-            if (!_channel.Writer.WaitToWriteAsync().AsTask().Wait(_factory.SyncWriteTimeout))
-                return false;
+            while (true)
+            {
+                var remaining = _factory.SyncWriteTimeout - Stopwatch.GetElapsedTime(startTimestamp);
 
-            if (!_channel.Writer.TryWrite(entry))
-                return false;
+                if (remaining <= TimeSpan.Zero)
+                    return LogWriteResult.Dropped;
 
-            Interlocked.Increment(ref _queuedEntries);
-            return true;
+                var waitTask = _channel.Writer.WaitToWriteAsync().AsTask();
+
+                if (!waitTask.Wait(remaining))
+                    return LogWriteResult.Dropped;
+
+                if (!waitTask.GetAwaiter().GetResult())
+                    return DetermineFailedWriteResult();
+
+                if (!_channel.Writer.TryWrite(entry))
+                    continue;
+
+                Interlocked.Increment(ref _queuedEntries);
+                _factory.RecordEntryAccepted();
+                return LogWriteResult.Accepted;
+            }
         }
         catch (AggregateException ex) when (ex.InnerException is ChannelClosedException)
         {
-            return false;
+            return DetermineFailedWriteResult();
         }
         catch (ChannelClosedException)
         {
-            return false;
+            return DetermineFailedWriteResult();
         }
     }
+
+    private async Task<LogWriteResult> TryEnqueueAsyncWithWait(
+        LogEntry entry,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            while (await _channel.Writer.WaitToWriteAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (!_channel.Writer.TryWrite(entry))
+                    continue;
+
+                Interlocked.Increment(ref _queuedEntries);
+                _factory.RecordEntryAccepted();
+                return LogWriteResult.Accepted;
+            }
+        }
+        catch (ChannelClosedException)
+        {
+            return DetermineFailedWriteResult();
+        }
+
+        return DetermineFailedWriteResult();
+    }
+
+    private LogWriteResult DetermineFailedWriteResult() =>
+        _disposeState != 0 || !_factory.IsAcceptingWrites
+            ? LogWriteResult.RejectedAfterShutdown
+            : LogWriteResult.Dropped;
 
     private void ReportDroppedMessage()
     {
@@ -215,7 +339,17 @@ internal sealed class InternalLogger : ILogger, IDisposable, IAsyncDisposable
         if (Interlocked.Exchange(ref _disposeState, 1) != 0)
             return;
 
-        _channel.Writer.TryComplete();
-        await _processingTask.ConfigureAwait(false);
+        try
+        {
+            _channel.Writer.TryComplete();
+            await _processingTask.ConfigureAwait(false);
+        }
+        finally
+        {
+            PicoLogMetrics.UnregisterQueueDepthProvider(_queueDepthProviderId);
+        }
     }
+
+    private long GetQueuedEntryCount() =>
+        _channel.Reader.CanCount ? _channel.Reader.Count : Volatile.Read(ref _queuedEntries);
 }

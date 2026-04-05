@@ -1,4 +1,5 @@
 global using System.Collections.Concurrent;
+global using System.Diagnostics.Metrics;
 global using PicoDI;
 global using PicoDI.Abs;
 global using PicoLog;
