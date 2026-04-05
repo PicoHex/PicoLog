@@ -8,4 +8,5 @@ public sealed record LogEntry
     public string? Message { get; set; }
     public Exception? Exception { get; set; }
     public IReadOnlyList<object>? Scopes { get; set; }
+    public IReadOnlyList<KeyValuePair<string, object?>>? Properties { get; set; }
 }
