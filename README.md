@@ -10,6 +10,8 @@ A lightweight, AOT-friendly logging framework for .NET edge and IoT workloads. T
 
 - **AOT compatibility**: targets `net10.0` and avoids reflection-heavy infrastructure
 - **Bounded async pipeline**: loggers enqueue entries into a bounded channel and write to sinks on a background task
+- **Structured properties**: optional key/value payloads flow through `LogEntry.Properties` and the built-in formatter output
+- **Built-in metrics**: the core package emits queue, drop, sink-failure, and shutdown metrics through `System.Diagnostics.Metrics`
 - **Minimal surface area**: only a few core abstractions need to be implemented to extend the system
 - **PicoDI integration**: built-in registrations for the logger factory and typed loggers with console logging by default and optional file logging when a file path is configured
 - **Scope support**: nested scopes flow through `AsyncLocal` and are attached to each `LogEntry`
@@ -62,6 +64,16 @@ var logger = new Logger<MyService>(loggerFactory);
 logger.Info("Application starting");
 logger.Warning("This is a warning");
 await logger.ErrorAsync("Error occurred", new InvalidOperationException("Something went wrong"));
+logger.LogStructured(
+    LogLevel.Info,
+    "Request completed",
+    new KeyValuePair<string, object?>[]
+    {
+        new("requestId", "req-42"),
+        new("statusCode", 200),
+        new("elapsedMs", 18.7)
+    }
+);
 ```
 
 ### DI Integration
@@ -107,7 +119,7 @@ await using var loggerFactory = new LoggerFactory(sinks)
 
 ### Lifecycle Ownership
 
-`LoggerFactory` owns cached per-category loggers, their background drain tasks, and the registered sinks. Dispose the factory during shutdown to flush queued entries and release sink resources.
+`LoggerFactory` owns cached per-category loggers, their background drain tasks, and the registered sinks. Dispose the factory during shutdown to flush queued entries and release sink resources. Once disposal begins, new writes are rejected while already queued entries continue draining.
 
 ```csharp
 await using var loggerFactory = new LoggerFactory(sinks);
@@ -115,16 +127,17 @@ await using var loggerFactory = new LoggerFactory(sinks);
 var logger = new Logger<MyService>(loggerFactory);
 logger.Info("Starting up");
 
-// queued entries are flushed when the factory is disposed
+// queued entries are flushed when the factory is disposed;
+// writes that race with shutdown are rejected
 ```
 
 ### Queue Pressure
 
-`LoggerFactoryOptions.QueueFullMode` makes queue pressure handling explicit:
+`LoggerFactoryOptions.QueueFullMode` makes queue pressure handling explicit for both sync and async writes:
 
-- `DropOldest` keeps sync logging non-blocking by discarding the oldest queued entry. This is the default.
-- `DropWrite` rejects the new sync entry and reports the drop through `OnMessagesDropped`.
-- `Wait` blocks sync logging up to `SyncWriteTimeout` so backpressure is visible to the caller.
+- `DropOldest` keeps logging non-blocking by discarding the oldest queued entry. This is the default.
+- `DropWrite` rejects the new entry and reports the drop through `OnMessagesDropped`.
+- `Wait` blocks sync logging up to `SyncWriteTimeout` and makes async logging await queue space until cancellation is requested.
 
 ```csharp
 var options = new LoggerFactoryOptions
@@ -152,7 +165,7 @@ await using var loggerFactory = new LoggerFactory(sinks, options);
 - a console sink by default
 - an optional file sink when `FilePath` is configured
 
-When shutting down, dispose the resolved factory explicitly so queued log entries are flushed before process exit.
+When shutting down, dispose the resolved factory explicitly so queued log entries are flushed before process exit. Writes that arrive after shutdown begins are rejected instead of being accepted late.
 
 You can enable file logging either through the optional `filePath` parameter or by setting `options.FilePath` in the configure overload:
 
@@ -170,11 +183,34 @@ PicoLog.DI.SvcContainerExtensions.AddLogging(container, options =>
 
 ### Built-in Formatter
 
-`ConsoleFormatter` produces human-readable lines with timestamp, level, category, message, exception text, and optional scopes.
+`ConsoleFormatter` produces human-readable lines with timestamp, level, category, message, optional structured properties, exception text, and optional scopes.
 
 ```csharp
 var formatter = new ConsoleFormatter();
 var sink = new ConsoleSink(formatter);
+```
+
+### Structured Logging
+
+The core logger supports optional structured properties through `IStructuredLogger`, while still keeping `ILogger` unchanged. When you use the built-in `LoggerFactory`, `LogStructured()` and `LogStructuredAsync()` preserve the payload on `LogEntry.Properties`.
+
+```csharp
+logger.LogStructured(
+    LogLevel.Warning,
+    "Cache miss",
+    new KeyValuePair<string, object?>[]
+    {
+        new("cacheKey", "user:42"),
+        new("node", "edge-a"),
+        new("attempt", 3)
+    }
+);
+```
+
+`ConsoleFormatter` appends structured properties in a compact textual form after the message, for example:
+
+```text
+[2026-04-05 11:30:42.123] WARNING   [MyService] Cache miss {cacheKey="user:42", node="edge-a", attempt=3}
 ```
 
 ### Logging Extensions
@@ -183,18 +219,44 @@ The shipped extension methods are defined on `ILogger` and `ILogger<T>`:
 
 - `Trace`, `Debug`, `Info`, `Notice`, `Warning`, `Error`, `Critical`, `Alert`, `Emergency`
 - Async counterparts such as `InfoAsync` and `ErrorAsync`
+- `LogStructured` and `LogStructuredAsync` for attaching structured properties to an entry
 
 ### Overflow Behavior
 
 Both sync and async logging write into a bounded channel.
 
-- Sync `Log()` follows `LoggerFactoryOptions.QueueFullMode`.
+- Sync `Log()` and async `LogAsync()` both follow `LoggerFactoryOptions.QueueFullMode`.
 - The default is `DropOldest`, which favors throughput and low caller latency over guaranteed delivery.
-- `Wait` makes backpressure visible to the caller by blocking sync writes until queue space becomes available or `SyncWriteTimeout` elapses.
+- `Wait` makes backpressure visible to the caller by blocking sync writes until queue space becomes available or `SyncWriteTimeout` elapses, and by awaiting queue space for async writes until cancellation is requested.
 - `DropWrite` preserves older queued entries and reports dropped new entries through `OnMessagesDropped`.
-- `LogAsync()` uses `WriteAsync()` and naturally applies backpressure instead of silently returning.
+- Once factory disposal begins, new writes are rejected while already queued entries continue flushing.
 
 For general application logging, the default `DropOldest` behavior is usually acceptable. For audit-style logging, prefer `Wait` or a dedicated sink strategy.
+
+### Built-in Metrics
+
+The core `PicoLog` package emits a small built-in metrics surface through `System.Diagnostics.Metrics` using meter name `PicoLog`.
+
+- `picolog.entries.enqueued`
+- `picolog.entries.dropped`
+- `picolog.sinks.failures`
+- `picolog.writes.rejected_after_shutdown`
+- `picolog.queue.entries`
+- `picolog.shutdown.drain.duration`
+
+These instruments are designed to stay low-cardinality and lightweight. They can be observed with `MeterListener` directly or bridged into broader telemetry infrastructure.
+
+```csharp
+using var listener = new MeterListener();
+
+listener.InstrumentPublished = (instrument, meterListener) =>
+{
+    if (instrument.Meter.Name == PicoLogMetrics.MeterName)
+        meterListener.EnableMeasurementEvents(instrument);
+};
+
+listener.Start();
+```
 
 ## AOT Compatibility
 
@@ -252,6 +314,7 @@ dotnet test --solution ./PicoLog.slnx --configuration Release
 
 - The core implementation is small and easy to reason about: `LoggerFactory` owns logger and sink lifetimes, while each `InternalLogger` has a single bounded queue and a single background drain task.
 - The project is AOT-friendly and avoids reflection-heavy infrastructure, which makes it a good fit for Native AOT, edge, and IoT workloads.
+- Structured properties and built-in metrics cover common operational needs without forcing a larger logging ecosystem into the application.
 - Queue pressure behavior is explicit rather than hidden. Callers can choose between `DropOldest`, `DropWrite`, and `Wait` depending on whether throughput or delivery matters more.
 - The built-in PicoDI integration stays thin and predictable instead of introducing a large hosting or configuration stack.
 
@@ -264,10 +327,10 @@ dotnet test --solution ./PicoLog.slnx --configuration Release
 
 ### Non-Goals and Weak Spots
 
-- This is not a full observability platform. It does not currently provide structured message templates, enrichers, rolling file management, remote transport sinks, or deep integration with broader telemetry ecosystems.
+- This is not a full observability platform. It supports structured properties and a small built-in metrics surface, but it does not provide message-template parsing, enrichers, rolling file management, remote transport sinks, or deep integration with broader telemetry ecosystems.
 - It is not optimized for very high-cardinality logger categories. The current design creates one `InternalLogger` and one background drain task per category.
 - It is not a default fit for audit or compliance logging where silent loss is unacceptable. The default queue mode favors throughput, and stronger delivery guarantees require explicit configuration such as `Wait` or a dedicated sink strategy.
-- Internal operational metrics are still limited. The project can report dropped messages, but it does not yet expose a broader built-in metrics surface for queue depth, sink latency, or flush timing.
+- Built-in metrics cover queue depth, accepted and dropped entries, sink failures, late writes during shutdown, and shutdown drain duration. They do not yet expose per-category metrics, sink latency histograms, or a larger end-to-end telemetry model.
 
 ## Extending PicoLog
 
@@ -310,7 +373,10 @@ The test suite currently covers:
 - file sink writes racing with async disposal
 - logger caching by category
 - minimum-level filtering
+- structured payload capture and formatting
+- built-in metrics emission
 - scope capture and flush on factory disposal
+- rejecting writes after shutdown begins
 - sink failure isolation
 - async tail-message flushing
 - real file sink tail persistence
