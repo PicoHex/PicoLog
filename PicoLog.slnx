@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/PicoLog.Benchmarks/PicoLog.Benchmarks.csproj" />
+  </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/PicoLog.Sample/PicoLog.Sample.csproj" />
   </Folder>
