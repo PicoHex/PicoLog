@@ -890,7 +890,12 @@ public sealed class LoggerFactoryTests
         dropLogger.Info("first");
         await sink.WriteStarted;
         dropLogger.Info("second");
-        listener.RecordObservableInstruments();
+        await RecordObservableMeasurementUntilAsync(
+            listener,
+            measurements,
+            PicoLogMetrics.QueuedEntriesName,
+            value => value == 1
+        );
         dropLogger.Info("third");
         sink.Release();
         await dropFactory.DisposeAsync();
@@ -1061,6 +1066,31 @@ public sealed class LoggerFactoryTests
         await Assert.That(measurements.TryGetValue(instrumentName, out var values)).IsTrue();
         await Assert.That(values!).IsNotEmpty();
         await Assert.That(values!.All(value => value >= minimumValue)).IsTrue();
+    }
+
+    private static async Task RecordObservableMeasurementUntilAsync(
+        MeterListener listener,
+        ConcurrentDictionary<string, ConcurrentQueue<double>> measurements,
+        string instrumentName,
+        Func<double, bool> predicate
+    )
+    {
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            listener.RecordObservableInstruments();
+
+            if (
+                measurements.TryGetValue(instrumentName, out var values)
+                && values.Any(predicate)
+            )
+                return;
+
+            await Task.Delay(10);
+        }
+
+        throw new InvalidOperationException(
+            $"Did not observe expected measurement for '{instrumentName}' within the sampling window."
+        );
     }
 
     private static async Task WaitForEntriesAsync(CollectingSink sink, int expectedCount)
