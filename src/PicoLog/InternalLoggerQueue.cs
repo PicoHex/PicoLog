@@ -17,6 +17,7 @@ internal sealed class InternalLoggerQueue
     private readonly LogQueueFullMode _queueFullMode;
     private readonly TimeSpan _syncWriteTimeout;
     private int _queuedEntries;
+    private int _shutdownStarted;
 
     public InternalLoggerQueue(LoggerFactory factory)
     {
@@ -72,7 +73,11 @@ internal sealed class InternalLoggerQueue
             _ => ValueTask.FromResult(TryEnqueueSyncDropOldest(entry))
         };
 
-    public void Complete() => _writer.TryComplete();
+    public void Complete()
+    {
+        Volatile.Write(ref _shutdownStarted, 1);
+        _writer.TryComplete();
+    }
 
     public long GetQueuedEntryCount() => Volatile.Read(ref _queuedEntries);
 
@@ -195,5 +200,7 @@ internal sealed class InternalLoggerQueue
     }
 
     private LogWriteResult DetermineFailedWriteResult() =>
-        !_factory.IsAcceptingWrites ? LogWriteResult.RejectedAfterShutdown : LogWriteResult.Dropped;
+        Volatile.Read(ref _shutdownStarted) != 0 || !_factory.IsAcceptingWrites
+            ? LogWriteResult.RejectedAfterShutdown
+            : LogWriteResult.Dropped;
 }

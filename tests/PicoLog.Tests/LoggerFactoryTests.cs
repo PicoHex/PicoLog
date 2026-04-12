@@ -904,6 +904,63 @@ public sealed class LoggerFactoryTests
     }
 
     [Test]
+    public async Task LoggerDisposeAsync_ClassifiesPendingWaitWrites_AsRejectedAfterShutdown()
+    {
+        using var listener = new MeterListener();
+        var measurements = new ConcurrentDictionary<string, ConcurrentQueue<double>>(
+            StringComparer.Ordinal
+        );
+
+        listener.InstrumentPublished = (instrument, meterListener) =>
+        {
+            if (instrument.Meter.Name == PicoLogMetrics.MeterName)
+                meterListener.EnableMeasurementEvents(instrument);
+        };
+
+        listener.SetMeasurementEventCallback<long>(
+            (instrument, measurement, _, _) =>
+                measurements.GetOrAdd(instrument.Name, _ => new ConcurrentQueue<double>())
+                    .Enqueue(measurement)
+        );
+        listener.Start();
+
+        var sink = new BlockingSink();
+        long reportedDropCount = 0;
+        var options = new LoggerFactoryOptions
+        {
+            QueueCapacity = 1,
+            QueueFullMode = LogQueueFullMode.Wait,
+            OnMessagesDropped = (_, count) => reportedDropCount = count
+        };
+        await using var factory = new LoggerFactory([sink], options);
+        var logger = factory.CreateLogger("Tests.LoggerDispose");
+
+        logger.Info("first");
+        await sink.WriteStarted;
+        logger.Info("second");
+
+        var pendingWriteTask = logger.InfoAsync("third");
+        await Task.Delay(50);
+        await Assert.That(pendingWriteTask.IsCompleted).IsFalse();
+
+        var disposeTask = ((IAsyncDisposable)logger).DisposeAsync().AsTask();
+        await Task.Delay(50);
+
+        sink.Release();
+        await Task.WhenAll(disposeTask, pendingWriteTask);
+        await factory.DisposeAsync();
+        listener.RecordObservableInstruments();
+
+        await Assert.That(sink.WrittenCount).IsEqualTo(2);
+        await Assert.That(reportedDropCount).IsEqualTo(0);
+        await AssertMeasurementAtLeastAsync(
+            measurements,
+            PicoLogMetrics.ShutdownRejectedWritesName,
+            1
+        );
+    }
+
+    [Test]
     public async Task Metrics_Record_RejectedWrites_DroppedWrites_SinkFailures_And_ShutdownDuration()
     {
         using var listener = new MeterListener();
