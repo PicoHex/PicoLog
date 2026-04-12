@@ -119,6 +119,33 @@ public sealed class SvcContainerExtensionsTests
     }
 
     [Test]
+    public async Task AddLogging_ConfigureOverload_UsesColoredConsoleByDefault()
+    {
+        ISvcContainer container = new SvcContainer();
+
+        PicoLog.DI.SvcContainerExtensions.AddLogging(
+            container,
+            options =>
+            {
+                options.MinLevel = LogLevel.Info;
+            }
+        );
+
+        await using var scope = container.CreateScope();
+        var factory = (LoggerFactory)scope.GetService(typeof(ILoggerFactory));
+        var sinksField = typeof(LoggerFactory).GetField(
+            "_sinks",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
+        );
+        var sinks = (ILogSink[])sinksField!.GetValue(factory)!;
+
+        await Assert.That(sinks).Count().IsEqualTo(1);
+        await Assert.That(sinks[0] is ColoredConsoleSink).IsTrue();
+
+        await factory.DisposeAsync();
+    }
+
+    [Test]
     public async Task AddLogging_ConfigureOverload_HonorsNestedFactoryMinLevel()
     {
         ISvcContainer container = new SvcContainer();

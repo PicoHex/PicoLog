@@ -621,6 +621,23 @@ public sealed class LoggerFactoryTests
     }
 
     [Test]
+    public async Task Logging_WithPlainConsoleFallback_WritesSinkFailureDetails()
+    {
+        using var writer = new StringWriter();
+        await using var factory = new LoggerFactory(
+            [new ThrowingSink(), new ConsoleSink(new TestFormatter(), writer)]
+        );
+        var logger = factory.CreateLogger("Tests.Category");
+
+        await logger.WarningAsync("payload");
+        await factory.DisposeAsync();
+
+        await Assert
+            .That(writer.ToString())
+            .Contains("Error|Failed to write log entry to sink: payload|Sink failure");
+    }
+
+    [Test]
     public async Task ConsoleSink_WritesMessages_For_All_LogLevels()
     {
         using var writer = new StringWriter();
@@ -663,6 +680,40 @@ public sealed class LoggerFactoryTests
 
         await Assert.That(writer.ToString()).Contains("Warning|colored-message");
     }
+
+    [Test]
+#pragma warning disable TUnit0055 // Intentional: this test must exercise the real Console.Out path.
+    public async Task ColoredConsoleSink_UsesConsoleOutPath_And_RestoresForegroundColor()
+    {
+        var originalWriter = Console.Out;
+        using var redirectedWriter = new StringWriter();
+
+        try
+        {
+            Console.SetOut(redirectedWriter);
+            var colorBeforeWrite = Console.ForegroundColor;
+
+            await using var sink = new ColoredConsoleSink(new TestFormatter());
+
+            await sink.WriteAsync(
+                new LogEntry
+                {
+                    Timestamp = DateTimeOffset.UtcNow,
+                    Level = LogLevel.Error,
+                    Category = nameof(LoggerFactoryTests),
+                    Message = "console-out-message"
+                }
+            );
+
+            await Assert.That(redirectedWriter.ToString()).Contains("Error|console-out-message");
+            await Assert.That(Console.ForegroundColor).IsEqualTo(colorBeforeWrite);
+        }
+        finally
+        {
+            Console.SetOut(originalWriter);
+        }
+    }
+#pragma warning restore TUnit0055
 
     [Test]
     public async Task AddLogging_ResolvesTypedLoggerFromContainer()
