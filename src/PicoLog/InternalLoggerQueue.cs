@@ -3,7 +3,8 @@ namespace PicoLog;
 internal enum LogWriteResult
 {
     Accepted,
-    Dropped,
+    AcceptedAfterEviction,
+    DroppedNewWrite,
     RejectedAfterShutdown
 }
 
@@ -91,7 +92,7 @@ internal sealed class InternalLoggerQueue
         _factory.RecordEntryAccepted();
 
         if (wasAtCapacity)
-            return LogWriteResult.Dropped;
+            return LogWriteResult.AcceptedAfterEviction;
 
         Interlocked.Increment(ref _queuedEntries);
         return LogWriteResult.Accepted;
@@ -100,7 +101,7 @@ internal sealed class InternalLoggerQueue
     private LogWriteResult TryEnqueueSyncDropWrite(LogEntry entry)
     {
         if (Volatile.Read(ref _queuedEntries) >= _queueCapacity)
-            return LogWriteResult.Dropped;
+            return LogWriteResult.DroppedNewWrite;
 
         if (!_writer.TryWrite(entry))
             return DetermineFailedWriteResult();
@@ -128,7 +129,7 @@ internal sealed class InternalLoggerQueue
                 var remaining = _syncWriteTimeout - Stopwatch.GetElapsedTime(startTimestamp);
 
                 if (remaining <= TimeSpan.Zero)
-                    return LogWriteResult.Dropped;
+                    return LogWriteResult.DroppedNewWrite;
 
                 var waitOperation = _writer.WaitToWriteAsync();
 
@@ -143,7 +144,7 @@ internal sealed class InternalLoggerQueue
                 var waitTask = waitOperation.AsTask();
 
                 if (!waitTask.Wait(remaining))
-                    return LogWriteResult.Dropped;
+                    return LogWriteResult.DroppedNewWrite;
 
                 if (!waitTask.GetAwaiter().GetResult())
                     return DetermineFailedWriteResult();
@@ -202,5 +203,5 @@ internal sealed class InternalLoggerQueue
     private LogWriteResult DetermineFailedWriteResult() =>
         Volatile.Read(ref _shutdownStarted) != 0 || !_factory.IsAcceptingWrites
             ? LogWriteResult.RejectedAfterShutdown
-            : LogWriteResult.Dropped;
+            : LogWriteResult.DroppedNewWrite;
 }

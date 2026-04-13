@@ -113,7 +113,7 @@ internal sealed class InternalLogger : IStructuredLogger, IDisposable, IAsyncDis
 
     private void HandleWriteResult(LogWriteResult result)
     {
-        if (result == LogWriteResult.Dropped)
+        if (result is LogWriteResult.AcceptedAfterEviction or LogWriteResult.DroppedNewWrite)
             ReportDroppedMessage();
         else if (result == LogWriteResult.RejectedAfterShutdown)
             _factory.RecordRejectedAfterShutdown();

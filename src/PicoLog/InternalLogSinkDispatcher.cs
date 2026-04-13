@@ -10,7 +10,7 @@ internal sealed class InternalLogSinkDispatcher
     {
         _sinks = sinks ?? throw new ArgumentNullException(nameof(sinks));
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
-        _fallbackSink = _sinks.FirstOrDefault(static sink => sink is ConsoleSink or ColoredConsoleSink);
+        _fallbackSink = _sinks.FirstOrDefault(static sink => sink is IConsoleFallbackSink);
     }
 
     public async Task ProcessEntriesAsync(InternalLoggerQueue queue)
