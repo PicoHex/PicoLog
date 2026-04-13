@@ -773,8 +773,7 @@ public sealed class LoggerFactoryTests
             await Assert.That(consumer).IsNotNull();
             await Assert.That(consumer!.Logger).IsNotNull();
 
-            if (factory is IAsyncDisposable asyncDisposable)
-                await asyncDisposable.DisposeAsync();
+            await factory.DisposeAsync();
         }
         finally
         {
@@ -799,8 +798,7 @@ public sealed class LoggerFactoryTests
 
             await logger.InfoAsync("configured-path");
 
-            if (factory is IAsyncDisposable asyncDisposable)
-                await asyncDisposable.DisposeAsync();
+            await factory!.DisposeAsync();
 
             await Assert.That(File.Exists(filePath)).IsTrue();
             var contents = await File.ReadAllTextAsync(filePath);
@@ -862,8 +860,7 @@ public sealed class LoggerFactoryTests
             consumer!.Logger.Info("ignored-by-min-level");
             await consumer.Logger.ErrorAsync("written-by-typed-logger");
 
-            if (factory is IAsyncDisposable asyncDisposable)
-                await asyncDisposable.DisposeAsync();
+            await factory.DisposeAsync();
 
             var contents = await File.ReadAllTextAsync(filePath);
             await Assert.That(contents.Contains("ignored-by-min-level")).IsFalse();

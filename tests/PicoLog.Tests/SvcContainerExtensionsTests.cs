@@ -76,8 +76,7 @@ public sealed class SvcContainerExtensionsTests
             logger.Info("ignored");
             await logger.ErrorAsync("written");
 
-            if (factory is IAsyncDisposable asyncDisposable)
-                await asyncDisposable.DisposeAsync();
+            await factory.DisposeAsync();
 
             var contents = await File.ReadAllTextAsync(filePath);
             await Assert.That(contents.Contains("ignored")).IsFalse();
@@ -170,8 +169,7 @@ public sealed class SvcContainerExtensionsTests
             logger.Warning("ignored-warning");
             await logger.CriticalAsync("written-critical");
 
-            if (factory is IAsyncDisposable asyncDisposable)
-                await asyncDisposable.DisposeAsync();
+            await factory.DisposeAsync();
 
             var contents = await File.ReadAllTextAsync(filePath);
             await Assert.That(contents.Contains("ignored-warning")).IsFalse();

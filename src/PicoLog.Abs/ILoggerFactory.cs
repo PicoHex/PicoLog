@@ -1,6 +1,6 @@
 ﻿namespace PicoLog.Abs;
 
-public interface ILoggerFactory
+public interface ILoggerFactory : IAsyncDisposable
 {
     ILogger CreateLogger(string categoryName);
 }
