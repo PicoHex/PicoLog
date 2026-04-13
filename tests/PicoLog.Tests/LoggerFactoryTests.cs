@@ -638,6 +638,29 @@ public sealed class LoggerFactoryTests
     }
 
     [Test]
+    public async Task Logging_WithMultipleConsoleFallbacks_UsesLastRegisteredConsoleSink()
+    {
+        using var firstWriter = new StringWriter();
+        using var secondWriter = new StringWriter();
+        await using var factory = new LoggerFactory(
+            [
+                new ThrowingSink(),
+                new ConsoleSink(new TestFormatter(), firstWriter),
+                new ColoredConsoleSink(new TestFormatter(), secondWriter)
+            ]
+        );
+        var logger = factory.CreateLogger("Tests.Category");
+
+        await logger.WarningAsync("payload");
+        await factory.DisposeAsync();
+
+        await Assert.That(firstWriter.ToString()).DoesNotContain("Failed to write log entry to sink: payload");
+        await Assert
+            .That(secondWriter.ToString())
+            .Contains("Error|Failed to write log entry to sink: payload|Sink failure");
+    }
+
+    [Test]
     public async Task Logging_WithCustomSink_DoesNotUseIt_AsConsoleFallback()
     {
         var customSink = new CustomFallbackLookingSink();
