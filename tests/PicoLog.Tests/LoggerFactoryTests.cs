@@ -206,6 +206,41 @@ public sealed class LoggerFactoryTests
     }
 
     [Test]
+    public async Task ConsoleFormatter_RendersExpectedOutput_WithEscapedProperties_Exception_And_Scopes()
+    {
+        var formatter = new ConsoleFormatter();
+        var entry = new LogEntry
+        {
+            Timestamp = new DateTimeOffset(2026, 4, 13, 8, 9, 10, 123, TimeSpan.Zero),
+            Level = LogLevel.Warning,
+            Category = "Tests.Category",
+            Message = "hello",
+            Exception = new InvalidOperationException("boom"),
+            Properties =
+            [
+                new("quote", "a\"b"),
+                new("line", "x\ny"),
+                new("tab", "\t"),
+                new("slash", "\\"),
+                new("letter", 'z'),
+                new("number", 3),
+                new("nullable", null)
+            ],
+            Scopes = ["outer", "inner"]
+        };
+
+        var rendered = formatter.Format(entry);
+        var expected =
+            "[2026-04-13 08:09:10.123] WARNING   [Tests.Category] hello {quote=\"a\\\"b\", line=\"x\\ny\", tab=\"\\t\", slash=\"\\\\\", letter=\"z\", number=3, nullable=null}"
+            + Environment.NewLine
+            + "EXCEPTION: System.InvalidOperationException: boom"
+            + Environment.NewLine
+            + "SCOPES: [outer => inner]";
+
+        await Assert.That(rendered).IsEqualTo(expected);
+    }
+
+    [Test]
     public async Task StructuredLogger_CopiesProperties_On_EntryCreation()
     {
         var sink = new CollectingSink();

@@ -11,16 +11,16 @@ internal sealed class InternalLogger : IStructuredLogger, IDisposable, IAsyncDis
     private int _disposeState;
     private long _droppedEntries;
 
-    public InternalLogger(string categoryName, IEnumerable<ILogSink> sinks, LoggerFactory factory)
+    public InternalLogger(string categoryName, ILogSink[] sinks, LoggerFactory factory)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _categoryName = categoryName;
         _sinkDispatcher = new InternalLogSinkDispatcher(
-            sinks?.ToArray() ?? throw new ArgumentNullException(nameof(sinks)),
+            sinks ?? throw new ArgumentNullException(nameof(sinks)),
             _factory
         );
         _queue = new InternalLoggerQueue(_factory);
-        _processingTask = Task.Run(async () => await _sinkDispatcher.ProcessEntriesAsync(_queue).ConfigureAwait(false));
+        _processingTask = _sinkDispatcher.ProcessEntriesAsync(_queue);
         _queueDepthProviderId = PicoLogMetrics.RegisterQueueDepthProvider(_queue.GetQueuedEntryCount);
     }
 

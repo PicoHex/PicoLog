@@ -4,26 +4,56 @@ public sealed class ConsoleFormatter : ILogFormatter
 {
     public string Format(LogEntry entry)
     {
-        var level = entry.Level.ToString().ToUpperInvariant();
-
-        var sb = new StringBuilder()
-            .Append($"[{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff}] ")
-            .Append(level.PadRight(9))
+        var sb = new StringBuilder(Math.Max(128, (entry.Message?.Length ?? 0) + 64))
+            .Append('[')
+            .Append(entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture))
+            .Append("] ")
+            .Append(GetLevelText(entry.Level))
             .Append(' ')
-            .Append($"[{entry.Category}] ")
+            .Append('[')
+            .Append(entry.Category)
+            .Append("] ")
             .Append(entry.Message);
 
         AppendProperties(sb, entry.Properties);
 
         if (entry.Exception is not null)
-            sb.AppendLine().Append($"EXCEPTION: {entry.Exception}");
+            sb.AppendLine().Append("EXCEPTION: ").Append(entry.Exception);
 
         if (!(entry.Scopes?.Count > 0))
             return sb.ToString();
 
-        sb.AppendLine().Append("SCOPES: [").Append(string.Join(" => ", entry.Scopes)).Append(']');
+        sb.AppendLine().Append("SCOPES: [");
+        AppendScopes(sb, entry.Scopes);
+        sb.Append(']');
 
         return sb.ToString();
+    }
+
+    private static string GetLevelText(LogLevel level) =>
+        level switch
+        {
+            LogLevel.Trace => "TRACE    ",
+            LogLevel.Debug => "DEBUG    ",
+            LogLevel.Info => "INFO     ",
+            LogLevel.Notice => "NOTICE   ",
+            LogLevel.Warning => "WARNING  ",
+            LogLevel.Error => "ERROR    ",
+            LogLevel.Critical => "CRITICAL ",
+            LogLevel.Alert => "ALERT    ",
+            LogLevel.Emergency => "EMERGENCY",
+            _ => "NONE     "
+        };
+
+    private static void AppendScopes(StringBuilder builder, IReadOnlyList<object> scopes)
+    {
+        for (var index = 0; index < scopes.Count; index++)
+        {
+            if (index > 0)
+                builder.Append(" => ");
+
+            builder.Append(scopes[index]);
+        }
     }
 
     private static void AppendProperties(
@@ -68,7 +98,7 @@ public sealed class ConsoleFormatter : ILogFormatter
         if (value is char character)
         {
             builder.Append('"');
-            AppendEscapedString(builder, character.ToString());
+            AppendEscapedCharacter(builder, character);
             builder.Append('"');
             return;
         }
@@ -85,16 +115,31 @@ public sealed class ConsoleFormatter : ILogFormatter
     private static void AppendEscapedString(StringBuilder builder, string value)
     {
         foreach (var character in value)
+            AppendEscapedCharacter(builder, character);
+    }
+
+    private static void AppendEscapedCharacter(StringBuilder builder, char character)
+    {
+        switch (character)
         {
-            builder.Append(character switch
-            {
-                '\\' => "\\\\",
-                '"' => "\\\"",
-                '\r' => "\\r",
-                '\n' => "\\n",
-                '\t' => "\\t",
-                _ => character.ToString()
-            });
+            case '\\':
+                builder.Append("\\\\");
+                break;
+            case '"':
+                builder.Append("\\\"");
+                break;
+            case '\r':
+                builder.Append("\\r");
+                break;
+            case '\n':
+                builder.Append("\\n");
+                break;
+            case '\t':
+                builder.Append("\\t");
+                break;
+            default:
+                builder.Append(character);
+                break;
         }
     }
 }

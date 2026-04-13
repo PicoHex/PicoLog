@@ -44,7 +44,7 @@ internal sealed class InternalLoggerQueue
         _reader = _channel.Reader;
     }
 
-    public async Task<bool> WaitToReadAsync() => await _reader.WaitToReadAsync().ConfigureAwait(false);
+    public ValueTask<bool> WaitToReadAsync() => _reader.WaitToReadAsync();
 
     public bool TryRead([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out LogEntry? entry)
     {

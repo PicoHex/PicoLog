@@ -50,7 +50,7 @@ internal sealed class InternalLogSinkDispatcher
         {
             Timestamp = TimeProvider.System.GetLocalNow(),
             Level = LogLevel.Error,
-            Category = nameof(InternalLogger),
+            Category = nameof(InternalLogSinkDispatcher),
             Message = $"Failed to write log entry to sink: {originalEntry.Message}",
             Exception = ex
         };
