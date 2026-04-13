@@ -638,6 +638,23 @@ public sealed class LoggerFactoryTests
     }
 
     [Test]
+    public async Task Logging_WithCustomSink_DoesNotUseIt_AsConsoleFallback()
+    {
+        var customSink = new CustomFallbackLookingSink();
+        var collectingSink = new CollectingSink();
+        await using var factory = new LoggerFactory([new ThrowingSink(), customSink, collectingSink]);
+        var logger = factory.CreateLogger("Tests.Category");
+
+        await logger.WarningAsync("payload");
+        await factory.DisposeAsync();
+
+        await Assert.That(collectingSink.Entries).Count().IsEqualTo(1);
+        await Assert.That(collectingSink.Entries.Single().Message).IsEqualTo("payload");
+        await Assert.That(customSink.Entries).Count().IsEqualTo(1);
+        await Assert.That(customSink.Entries.Single().Message).IsEqualTo("payload");
+    }
+
+    [Test]
     public async Task ConsoleSink_WritesMessages_For_All_LogLevels()
     {
         using var writer = new StringWriter();
@@ -961,6 +978,60 @@ public sealed class LoggerFactoryTests
     }
 
     [Test]
+    public async Task DropOldest_Mode_ReportsAcceptedAfterEviction_AsDropped_Publicly()
+    {
+        long reportedDropCount = 0;
+        var sink = new BlockingSink();
+        var options = new LoggerFactoryOptions
+        {
+            QueueCapacity = 1,
+            QueueFullMode = LogQueueFullMode.DropOldest,
+            OnMessagesDropped = (_, droppedCount) => reportedDropCount = droppedCount
+        };
+        await using var factory = new LoggerFactory([sink], options);
+        var logger = factory.CreateLogger("Tests.Category");
+
+        logger.Info("first");
+        await sink.WriteStarted;
+        logger.Info("second");
+        logger.Info("third");
+
+        sink.Release();
+        await factory.DisposeAsync();
+
+        var messages = sink.Entries.Select(entry => entry.Message ?? string.Empty).ToArray();
+        await Assert.That(messages).IsEquivalentTo(["first", "third"]);
+        await Assert.That(reportedDropCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task DropWrite_Mode_ReportsDroppedNewWrite_Publicly_WithoutEvictingQueuedEntry()
+    {
+        long reportedDropCount = 0;
+        var sink = new BlockingSink();
+        var options = new LoggerFactoryOptions
+        {
+            QueueCapacity = 1,
+            QueueFullMode = LogQueueFullMode.DropWrite,
+            OnMessagesDropped = (_, droppedCount) => reportedDropCount = droppedCount
+        };
+        await using var factory = new LoggerFactory([sink], options);
+        var logger = factory.CreateLogger("Tests.Category");
+
+        logger.Info("first");
+        await sink.WriteStarted;
+        logger.Info("second");
+        logger.Info("third");
+
+        sink.Release();
+        await factory.DisposeAsync();
+
+        var messages = sink.Entries.Select(entry => entry.Message ?? string.Empty).ToArray();
+        await Assert.That(messages).IsEquivalentTo(["first", "second"]);
+        await Assert.That(reportedDropCount).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task Metrics_Record_RejectedWrites_DroppedWrites_SinkFailures_And_ShutdownDuration()
     {
         using var listener = new MeterListener();
@@ -1065,11 +1136,14 @@ public sealed class LoggerFactoryTests
 
     private sealed class BlockingSink : ILogSink
     {
+        private readonly ConcurrentQueue<LogEntry> _entries = [];
         private readonly TaskCompletionSource _writeStarted =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _release =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _writtenCount;
+
+        public IReadOnlyCollection<LogEntry> Entries => _entries.ToArray();
 
         public int WrittenCount => _writtenCount;
 
@@ -1077,6 +1151,7 @@ public sealed class LoggerFactoryTests
 
         public async Task WriteAsync(LogEntry entry, CancellationToken cancellationToken = default)
         {
+            _entries.Enqueue(entry);
             Interlocked.Increment(ref _writtenCount);
             _writeStarted.TrySetResult();
 
@@ -1103,6 +1178,23 @@ public sealed class LoggerFactoryTests
 
         public ValueTask DisposeAsync() =>
             ValueTask.FromException(new InvalidOperationException("dispose failure"));
+    }
+
+    private sealed class CustomFallbackLookingSink : ILogSink
+    {
+        private readonly ConcurrentQueue<LogEntry> _entries = [];
+
+        public IReadOnlyCollection<LogEntry> Entries => _entries.ToArray();
+
+        public Task WriteAsync(LogEntry entry, CancellationToken cancellationToken = default)
+        {
+            _entries.Enqueue(entry);
+            return Task.CompletedTask;
+        }
+
+        public void Dispose() { }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class CoordinatedDisposalSink : ILogSink
