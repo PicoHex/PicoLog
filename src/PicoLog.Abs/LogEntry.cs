@@ -2,11 +2,11 @@
 
 public sealed record LogEntry
 {
-    public DateTimeOffset Timestamp { get; set; }
-    public LogLevel Level { get; set; }
-    public string? Category { get; set; }
-    public string? Message { get; set; }
-    public Exception? Exception { get; set; }
-    public IReadOnlyList<object>? Scopes { get; set; }
-    public IReadOnlyList<KeyValuePair<string, object?>>? Properties { get; set; }
+    public DateTimeOffset Timestamp { get; init; }
+    public LogLevel Level { get; init; }
+    public string? Category { get; init; }
+    public string? Message { get; init; }
+    public Exception? Exception { get; init; }
+    public IReadOnlyList<object>? Scopes { get; init; }
+    public IReadOnlyList<KeyValuePair<string, object?>>? Properties { get; init; }
 }
