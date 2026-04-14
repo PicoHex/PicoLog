@@ -38,14 +38,14 @@ PicoLog/
 
 ### Core Logging Library
 
-```xml
-<PackageReference Include="PicoLog" Version="2026.1.6" />
+```bash
+dotnet add package PicoLog
 ```
 
 ### PicoDI Integration
 
-```xml
-<PackageReference Include="PicoLog.DI" Version="2026.1.6" />
+```bash
+dotnet add package PicoLog.DI
 ```
 
 ## Quick Start
