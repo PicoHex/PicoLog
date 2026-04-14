@@ -192,7 +192,7 @@ var sink = new ConsoleSink(formatter);
 
 ### Structured Logging
 
-The core logger supports optional structured properties through `IStructuredLogger`, while still keeping `ILogger` unchanged. When you use the built-in `LoggerFactory`, `LogStructured()` and `LogStructuredAsync()` preserve the payload on `LogEntry.Properties`.
+PicoLog keeps `ILogger` compatible and exposes guaranteed structured logging through `IStructuredLogger` / `IStructuredLogger<T>`. When you use the built-in `LoggerFactory`, the runtime logger preserves `LogStructured()` / `LogStructuredAsync()` payloads on `LogEntry.Properties`.
 
 ```csharp
 logger.LogStructured(
@@ -219,7 +219,9 @@ The shipped extension methods are defined on `ILogger` and `ILogger<T>`:
 
 - `Trace`, `Debug`, `Info`, `Notice`, `Warning`, `Error`, `Critical`, `Alert`, `Emergency`
 - Async counterparts such as `InfoAsync` and `ErrorAsync`
-- `LogStructured` and `LogStructuredAsync` for attaching structured properties to an entry
+- `LogStructured` and `LogStructuredAsync` as best-effort adapters that preserve properties when the runtime logger implements `IStructuredLogger`, and otherwise fall back to plain logging without structured payloads
+
+If you need a strict structured-logging contract, depend on `IStructuredLogger` / `IStructuredLogger<T>` directly.
 
 ### Overflow Behavior
 
