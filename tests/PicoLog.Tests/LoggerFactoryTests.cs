@@ -772,6 +772,14 @@ public sealed class LoggerFactoryTests
     }
 
     [Test]
+    public async Task ConsoleSink_SerializesWrites_WhenSharingNonConsoleWriter()
+    {
+        await AssertBuiltInConsoleSinkSerializesWritesToSharedNonConsoleWriterAsync(
+            static writer => new ConsoleSink(new TestFormatter(), writer)
+        );
+    }
+
+    [Test]
     public async Task ColoredConsoleSink_WritesPlainText_WhenWriterIsNotConsoleOut()
     {
         using var writer = new StringWriter();
@@ -788,6 +796,14 @@ public sealed class LoggerFactoryTests
         );
 
         await Assert.That(writer.ToString()).Contains("Warning|colored-message");
+    }
+
+    [Test]
+    public async Task ColoredConsoleSink_SerializesWrites_WhenSharingNonConsoleWriter()
+    {
+        await AssertBuiltInConsoleSinkSerializesWritesToSharedNonConsoleWriterAsync(
+            static writer => new ColoredConsoleSink(new TestFormatter(), writer)
+        );
     }
 
     [Test]
@@ -1325,6 +1341,47 @@ public sealed class LoggerFactoryTests
             $"{entry.Level}|{entry.Message}|{entry.Exception?.Message}";
     }
 
+    private sealed class ConcurrentWriteDetectingWriter : TextWriter
+    {
+        private readonly ConcurrentQueue<string?> _lines = [];
+        private readonly TaskCompletionSource _firstWriteEntered =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseWrites =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _activeWriteCount;
+        private int _enteredWriteCount;
+        private int _concurrentWriteCount;
+
+        public override System.Text.Encoding Encoding => System.Text.Encoding.UTF8;
+
+        public Task FirstWriteEntered => _firstWriteEntered.Task;
+
+        public IReadOnlyCollection<string?> Lines => _lines.ToArray();
+
+        public int ConcurrentWriteCount => Volatile.Read(ref _concurrentWriteCount);
+
+        public override void WriteLine(string? value)
+        {
+            if (Interlocked.Increment(ref _activeWriteCount) > 1)
+                Interlocked.Increment(ref _concurrentWriteCount);
+
+            if (Interlocked.Increment(ref _enteredWriteCount) == 1)
+                _firstWriteEntered.TrySetResult();
+
+            try
+            {
+                _releaseWrites.Task.GetAwaiter().GetResult();
+                _lines.Enqueue(value);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _activeWriteCount);
+            }
+        }
+
+        public void ReleaseWrites() => _releaseWrites.TrySetResult();
+    }
+
     private static async Task AssertMeasurementAtLeastAsync(
         ConcurrentDictionary<string, ConcurrentQueue<double>> measurements,
         string instrumentName,
@@ -1380,6 +1437,50 @@ public sealed class LoggerFactoryTests
         throw new InvalidOperationException(
             $"Did not observe expected measurement for '{instrumentName}' within the sampling window."
         );
+    }
+
+    private static async Task AssertBuiltInConsoleSinkSerializesWritesToSharedNonConsoleWriterAsync(
+        Func<TextWriter, ILogSink> createSink
+    )
+    {
+        using var writer = new ConcurrentWriteDetectingWriter();
+        await using var sink = createSink(writer);
+
+        var firstWrite = Task.Run(
+            () =>
+                sink.WriteAsync(
+                    new LogEntry
+                    {
+                        Timestamp = DateTimeOffset.UtcNow,
+                        Level = LogLevel.Warning,
+                        Category = nameof(LoggerFactoryTests),
+                        Message = "first"
+                    }
+                )
+        );
+
+        await writer.FirstWriteEntered;
+
+        var secondWrite = Task.Run(
+            () =>
+                sink.WriteAsync(
+                    new LogEntry
+                    {
+                        Timestamp = DateTimeOffset.UtcNow,
+                        Level = LogLevel.Error,
+                        Category = nameof(LoggerFactoryTests),
+                        Message = "second"
+                    }
+                )
+        );
+
+        await Task.Delay(50);
+        writer.ReleaseWrites();
+
+        await Task.WhenAll(firstWrite, secondWrite);
+
+        await Assert.That(writer.ConcurrentWriteCount).IsEqualTo(0);
+        await Assert.That(writer.Lines).Count().IsEqualTo(2);
     }
 
     private static async Task WaitForEntriesAsync(CollectingSink sink, int expectedCount)

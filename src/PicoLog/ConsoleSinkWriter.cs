@@ -4,13 +4,7 @@ internal static class ConsoleSinkWriter
 {
     public static Task WriteAsync(TextWriter writer, string message)
     {
-        if (!ReferenceEquals(writer, Console.Out))
-        {
-            writer.WriteLine(message);
-            return Task.CompletedTask;
-        }
-
-        lock (ConsoleWriteCoordinator.OutputLock)
+        lock (ConsoleWriteCoordinator.GetWriteLock(writer))
             writer.WriteLine(message);
 
         return Task.CompletedTask;
@@ -23,14 +17,16 @@ internal static class ConsoleSinkWriter
         Action<TextWriter, string, TState> consoleWrite
     )
     {
-        if (!ReferenceEquals(writer, Console.Out))
+        lock (ConsoleWriteCoordinator.GetWriteLock(writer))
         {
-            writer.WriteLine(message);
-            return Task.CompletedTask;
-        }
+            if (!ReferenceEquals(writer, Console.Out))
+            {
+                writer.WriteLine(message);
+                return Task.CompletedTask;
+            }
 
-        lock (ConsoleWriteCoordinator.OutputLock)
             consoleWrite(writer, message, state);
+        }
 
         return Task.CompletedTask;
     }
