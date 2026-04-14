@@ -19,6 +19,8 @@ public partial class LoggingBenchmarks
     private Microsoft.Extensions.Logging.ILoggerFactory _melSyncFactory = null!;
     private Microsoft.Extensions.Logging.ILogger _melAsyncLogger = null!;
     private Microsoft.Extensions.Logging.ILoggerFactory _melAsyncFactory = null!;
+    private Microsoft.Extensions.Logging.ILogger _melAsyncEntryLogger = null!;
+    private Microsoft.Extensions.Logging.ILoggerFactory _melAsyncEntryFactory = null!;
 
     [Params(1, 10, 100)]
     public int N { get; set; }
@@ -49,6 +51,13 @@ public partial class LoggingBenchmarks
             builder.AddProvider(new AsyncNullLoggerProvider(BenchmarkQueueCapacity));
         });
         _melAsyncLogger = _melAsyncFactory.CreateLogger("Benchmark");
+
+        _melAsyncEntryFactory = MelLoggerFactory.Create(builder =>
+        {
+            builder.SetMinimumLevel(MelLogLevel.Trace);
+            builder.AddProvider(new AsyncEntryLoggerProvider(BenchmarkQueueCapacity));
+        });
+        _melAsyncEntryLogger = _melAsyncEntryFactory.CreateLogger("Benchmark");
     }
 
     [GlobalCleanup]
@@ -57,6 +66,7 @@ public partial class LoggingBenchmarks
         _picoFactory.Dispose();
         _melSyncFactory.Dispose();
         _melAsyncFactory.Dispose();
+        _melAsyncEntryFactory.Dispose();
     }
 
     private static string CreateMessage(int iteration) => $"Hello from benchmark, iteration {iteration}";
@@ -76,6 +86,13 @@ public partial class LoggingBenchmarks
     {
         for (var i = 0; i < N; i++)
             LogMelString(_melAsyncLogger, CreateMessage(i));
+    }
+
+    [Benchmark]
+    public void MicrosoftAsyncEntryHandoff()
+    {
+        for (var i = 0; i < N; i++)
+            LogMelString(_melAsyncEntryLogger, CreateMessage(i));
     }
 
     [Benchmark]
