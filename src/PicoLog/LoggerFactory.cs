@@ -35,9 +35,9 @@ public sealed class LoggerFactory : ILoggerFactory, IDisposable, IAsyncDisposabl
             if (_registrations.TryGetValue(categoryName, out var existingRegistration))
                 return existingRegistration.Logger;
 
-            var processor = new InternalLoggerProcessor(categoryName, _runtime);
-            var logger = new InternalLogger(categoryName, _runtime, processor);
-            var registration = new LoggerRegistration(logger, processor);
+            var pipeline = new CategoryPipeline(categoryName, _runtime);
+            var logger = new InternalLogger(categoryName, _runtime, pipeline);
+            var registration = new LoggerRegistration(logger, pipeline);
             _registrations.Add(categoryName, registration);
             return logger;
         }
@@ -64,7 +64,7 @@ public sealed class LoggerFactory : ILoggerFactory, IDisposable, IAsyncDisposabl
         {
             try
             {
-                await registration.Processor.DisposeAsync().ConfigureAwait(false);
+                await registration.Pipeline.DisposeAsync().ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -101,10 +101,10 @@ public sealed class LoggerFactory : ILoggerFactory, IDisposable, IAsyncDisposabl
         sink.Dispose();
     }
 
-    private sealed class LoggerRegistration(InternalLogger logger, InternalLoggerProcessor processor)
+    private sealed class LoggerRegistration(InternalLogger logger, CategoryPipeline pipeline)
     {
         public InternalLogger Logger { get; } = logger;
 
-        public InternalLoggerProcessor Processor { get; } = processor;
+        public CategoryPipeline Pipeline { get; } = pipeline;
     }
 }

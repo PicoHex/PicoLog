@@ -1,6 +1,6 @@
 namespace PicoLog;
 
-internal sealed class InternalLoggerProcessor : IDisposable, IAsyncDisposable
+internal sealed class CategoryPipeline : IDisposable, IAsyncDisposable
 {
     private readonly string _categoryName;
     private readonly LoggerFactoryRuntime _runtime;
@@ -11,7 +11,7 @@ internal sealed class InternalLoggerProcessor : IDisposable, IAsyncDisposable
     private int _disposeState;
     private long _droppedEntries;
 
-    public InternalLoggerProcessor(string categoryName, LoggerFactoryRuntime runtime)
+    public CategoryPipeline(string categoryName, LoggerFactoryRuntime runtime)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(categoryName);
 

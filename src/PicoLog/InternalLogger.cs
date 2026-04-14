@@ -4,17 +4,17 @@ internal sealed class InternalLogger : IStructuredLogger
 {
     private readonly string _categoryName;
     private readonly LoggerFactoryRuntime _runtime;
-    private readonly InternalLoggerProcessor _processor;
+    private readonly CategoryPipeline _pipeline;
 
     public InternalLogger(
         string categoryName,
         LoggerFactoryRuntime runtime,
-        InternalLoggerProcessor processor
+        CategoryPipeline pipeline
     )
     {
         _categoryName = categoryName;
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
-        _processor = processor ?? throw new ArgumentNullException(nameof(processor));
+        _pipeline = pipeline ?? throw new ArgumentNullException(nameof(pipeline));
     }
 
     public IDisposable BeginScope<TState>(TState state)
@@ -62,7 +62,7 @@ internal sealed class InternalLogger : IStructuredLogger
             return;
 
         var entry = CreateEntry(logLevel, message, exception, properties);
-        _processor.Write(entry);
+        _pipeline.Write(entry);
     }
 
     private Task WriteAsync(
@@ -78,7 +78,7 @@ internal sealed class InternalLogger : IStructuredLogger
 
         var entry = CreateEntry(logLevel, message, exception, properties);
 
-        return _processor.WriteAsync(entry, cancellationToken);
+        return _pipeline.WriteAsync(entry, cancellationToken);
     }
 
     private bool CanAcceptWrite(LogLevel logLevel)
