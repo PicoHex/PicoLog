@@ -4,13 +4,13 @@ internal sealed class InternalLogSinkDispatcher
 {
     private readonly ILogSink[] _sinks;
     private readonly LoggerFactory _factory;
-    private readonly ILogSink? _fallbackSink;
+    private readonly ILogSink? _consoleFallbackSink;
 
     public InternalLogSinkDispatcher(ILogSink[] sinks, LoggerFactory factory)
     {
         _sinks = sinks ?? throw new ArgumentNullException(nameof(sinks));
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
-        _fallbackSink = _sinks.LastOrDefault(static sink => sink is IConsoleFallbackSink);
+        _consoleFallbackSink = ResolveLastRegisteredConsoleFallbackSink(_sinks);
     }
 
     public async Task ProcessEntriesAsync(InternalLoggerQueue queue)
@@ -25,43 +25,70 @@ internal sealed class InternalLogSinkDispatcher
     private async Task DispatchEntryAsync(LogEntry entry)
     {
         foreach (var sink in _sinks)
+            await WriteToSinkAsync(sink, entry).ConfigureAwait(false);
+    }
+
+    private async Task WriteToSinkAsync(ILogSink sink, LogEntry entry)
+    {
+        try
         {
-            try
-            {
-                await sink.WriteAsync(entry).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                _factory.RecordSinkFailure();
-                await ReportSinkErrorAsync(sink, ex, entry).ConfigureAwait(false);
-            }
+            await sink.WriteAsync(entry).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _factory.RecordSinkFailure();
+            await HandleSinkWriteFailureAsync(sink, entry, ex).ConfigureAwait(false);
         }
     }
 
-    private async Task ReportSinkErrorAsync(ILogSink failingSink, Exception ex, LogEntry originalEntry)
+    private async Task HandleSinkWriteFailureAsync(
+        ILogSink failingSink,
+        LogEntry originalEntry,
+        Exception exception
+    )
     {
-        if (_fallbackSink is null || ReferenceEquals(_fallbackSink, failingSink))
+        if (!ShouldWriteFailureToConsoleFallback(failingSink))
         {
-            Debug.WriteLine($"Sink write error for '{originalEntry.Category}': {ex}");
+            WriteSinkFailureToDebug(originalEntry, exception);
             return;
         }
 
-        var errorEntry = new LogEntry
+        await WriteFailureToConsoleFallbackAsync(originalEntry, exception).ConfigureAwait(false);
+    }
+
+    private bool ShouldWriteFailureToConsoleFallback(ILogSink failingSink) =>
+        _consoleFallbackSink is not null && !ReferenceEquals(_consoleFallbackSink, failingSink);
+
+    private static ILogSink? ResolveLastRegisteredConsoleFallbackSink(ILogSink[] sinks) =>
+        sinks.LastOrDefault(static sink => sink is IConsoleFallbackSink);
+
+    private static void WriteSinkFailureToDebug(LogEntry originalEntry, Exception exception) =>
+        Debug.WriteLine($"Sink write error for '{originalEntry.Category}': {exception}");
+
+    private static void WriteConsoleFallbackFailureToDebug(Exception fallbackException) =>
+        Debug.WriteLine($"Fallback sink write error: {fallbackException}");
+
+    private async Task WriteFailureToConsoleFallbackAsync(LogEntry originalEntry, Exception exception)
+    {
+        var errorEntry = CreateFallbackErrorEntry(originalEntry, exception);
+
+        try
+        {
+            await _consoleFallbackSink!.WriteAsync(errorEntry).ConfigureAwait(false);
+        }
+        catch (Exception fallbackException)
+        {
+            WriteConsoleFallbackFailureToDebug(fallbackException);
+        }
+    }
+
+    private static LogEntry CreateFallbackErrorEntry(LogEntry originalEntry, Exception exception) =>
+        new()
         {
             Timestamp = TimeProvider.System.GetLocalNow(),
             Level = LogLevel.Error,
             Category = nameof(InternalLogSinkDispatcher),
             Message = $"Failed to write log entry to sink: {originalEntry.Message}",
-            Exception = ex
+            Exception = exception
         };
-
-        try
-        {
-            await _fallbackSink.WriteAsync(errorEntry).ConfigureAwait(false);
-        }
-        catch (Exception fallbackException)
-        {
-            Debug.WriteLine($"Fallback sink write error: {fallbackException}");
-        }
-    }
 }
