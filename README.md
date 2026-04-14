@@ -119,7 +119,7 @@ await using var loggerFactory = new LoggerFactory(sinks)
 
 ### Lifecycle Ownership
 
-`LoggerFactory` owns cached per-category loggers, their per-category processors/pipelines, the background drain tasks those pipelines run, and the registered sinks. Dispose the factory during shutdown to flush queued entries and release sink resources. Once disposal begins, new writes are rejected while already queued entries continue draining.
+`LoggerFactory` owns cached per-category loggers, their per-category pipelines, the background drain tasks those pipelines run, and the registered sinks. Dispose the factory during shutdown to flush queued entries and release sink resources. Once disposal begins, new writes are rejected while already queued entries continue draining.
 
 ```csharp
 await using var loggerFactory = new LoggerFactory(sinks);
@@ -303,7 +303,7 @@ dotnet test --solution ./PicoLog.slnx --configuration Release
 ## Performance Considerations
 
 - Logger instances are cached per category inside `LoggerFactory`.
-- LoggerFactory owns one bounded channel, one processor pipeline, and one background drain task per category.
+- LoggerFactory owns one bounded channel, one category pipeline, and one background drain task per category.
 - Factory disposal flushes all active loggers before disposing sinks.
 - `FileSink` batches writes on its own bounded queue and flushes at batch boundaries or flush-interval boundaries.
 - Choosing `DropOldest`, `DropWrite`, or `Wait` is a throughput-vs-delivery tradeoff, not a correctness bug.
@@ -312,7 +312,7 @@ dotnet test --solution ./PicoLog.slnx --configuration Release
 
 ### Strengths
 
-- The core implementation is small and easy to reason about: `LoggerFactory` owns per-category logger registrations, processor pipelines, drain-task lifetimes, and sink lifetimes, while each `InternalLogger` remains a lightweight non-owning write facade.
+- The core implementation is small and easy to reason about: `LoggerFactory` owns per-category logger registrations, category pipelines, drain-task lifetimes, and sink lifetimes, while each `InternalLogger` remains a lightweight non-owning write facade.
 - The project is AOT-friendly and avoids reflection-heavy infrastructure, which makes it a good fit for Native AOT, edge, and IoT workloads.
 - Structured properties and built-in metrics cover common operational needs without forcing a larger logging ecosystem into the application.
 - Queue pressure behavior is explicit rather than hidden. Callers can choose between `DropOldest`, `DropWrite`, and `Wait` depending on whether throughput or delivery matters more.
@@ -328,7 +328,7 @@ dotnet test --solution ./PicoLog.slnx --configuration Release
 ### Non-Goals and Weak Spots
 
 - This is not a full observability platform. It supports structured properties and a small built-in metrics surface, but it does not provide message-template parsing, enrichers, rolling file management, remote transport sinks, or deep integration with broader telemetry ecosystems.
-- It is not optimized for very high-cardinality logger categories. The current design creates one factory-owned processor pipeline and one background drain task per category.
+- It is not optimized for very high-cardinality logger categories. The current design creates one factory-owned category pipeline and one background drain task per category.
 - It is not a default fit for audit or compliance logging where silent loss is unacceptable. The default queue mode favors throughput, and stronger delivery guarantees require explicit configuration such as `Wait` or a dedicated sink strategy.
 - Built-in metrics cover queue depth, accepted and dropped entries, sink failures, late writes during shutdown, and shutdown drain duration. They do not yet expose per-category metrics, sink latency histograms, or a larger end-to-end telemetry model.
 
