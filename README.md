@@ -1,10 +1,12 @@
 # PicoLog
 
+[English](README.md) | [简体中文](README.zh.md) | [繁體中文](README.zh-TW.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [日本語](README.ja.md) | [Português (Brasil)](README.pt-BR.md) | [Русский](README.ru.md)
+
 ![CI](https://github.com/PicoHex/PicoLog/actions/workflows/ci.yml/badge.svg)
 [![NuGet](https://img.shields.io/nuget/v/PicoLog.svg)](https://www.nuget.org/packages/PicoLog)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A lightweight, AOT-friendly logging framework for .NET edge and IoT workloads. The repository currently contains three packages: contracts, the core logger implementation, and PicoDI integration.
+A lightweight, AOT-friendly logging framework for .NET edge and IoT workloads. The repository contains contracts, the core logger implementation, PicoDI integration, a sample app, and a dedicated benchmark project.
 
 ## Features
 
@@ -14,6 +16,7 @@ A lightweight, AOT-friendly logging framework for .NET edge and IoT workloads. T
 - **Built-in metrics**: the core package emits queue, drop, sink-failure, and shutdown metrics through `System.Diagnostics.Metrics`
 - **Minimal surface area**: only a few core abstractions need to be implemented to extend the system
 - **PicoDI integration**: built-in registrations for the logger factory and typed loggers with console logging by default and optional file logging when a file path is configured
+- **Benchmark coverage**: includes a PicoBench-based benchmark project with lightweight and fairer MEL async handoff baselines
 - **Scope support**: nested scopes flow through `AsyncLocal` and are attached to each `LogEntry`
 
 ## Project Structure
@@ -24,9 +27,11 @@ PicoLog/
 │   ├── PicoLog.Abs/       # Abstract interfaces and contracts
 │   ├── PicoLog/           # Core logging implementation
 │   └── PicoLog.DI/        # Dependency injection integration
+├── benchmarks/
+│   └── PicoLog.Benchmarks/# PicoBench-based benchmark project
 ├── samples/
 │   └── PicoLog.Sample/    # Example usage
-└── tests/                      # Test projects
+└── tests/                # Test projects
 ```
 
 ## Installation
@@ -99,7 +104,14 @@ container.RegisterScoped<IMyService, MyService>();
 await using var scope = container.CreateScope();
 
 var service = scope.GetService<IMyService>();
+var structuredLogger = scope.GetService<IStructuredLogger<MyService>>();
 await service.DoWorkAsync();
+
+structuredLogger.LogStructured(
+    LogLevel.Info,
+    "DI structured event",
+    [new("tenant", "alpha"), new("attempt", 3)]
+);
 
 await scope.GetService<ILoggerFactory>().DisposeAsync();
 ```
@@ -162,12 +174,13 @@ await using var loggerFactory = new LoggerFactory(sinks, options);
 
 - a singleton `ILoggerFactory`
 - typed `ILogger<T>` adapters
+- typed `IStructuredLogger<T>` adapters
 - a console sink by default
 - an optional file sink when `FilePath` is configured
 
 When shutting down, dispose the resolved factory explicitly so queued log entries are flushed before process exit. Writes that arrive after shutdown begins are rejected instead of being accepted late.
 
-You can enable file logging either through the optional `filePath` parameter or by setting `options.FilePath` in the configure overload:
+You can enable file logging either through the optional `filePath` parameter, by setting `options.FilePath`, or by setting `options.File.FilePath` in the configure overload. An explicit file path is treated as opting into the file sink.
 
 ```csharp
 PicoLog.DI.SvcContainerExtensions.AddLogging(container, LogLevel.Info, "logs/app.log");
@@ -178,6 +191,14 @@ PicoLog.DI.SvcContainerExtensions.AddLogging(container, options =>
 {
     options.MinLevel = LogLevel.Info;
     options.FilePath = "logs/app.log";
+});
+```
+
+```csharp
+PicoLog.DI.SvcContainerExtensions.AddLogging(container, options =>
+{
+    options.MinLevel = LogLevel.Info;
+    options.File.FilePath = "logs/app.log";
 });
 ```
 
@@ -309,6 +330,33 @@ dotnet test --solution ./PicoLog.slnx --configuration Release
 - Factory disposal flushes all active loggers before disposing sinks.
 - `FileSink` batches writes on its own bounded queue and flushes at batch boundaries or flush-interval boundaries.
 - Choosing `DropOldest`, `DropWrite`, or `Wait` is a throughput-vs-delivery tradeoff, not a correctness bug.
+
+## Benchmarks
+
+The repository includes `benchmarks/PicoLog.Benchmarks`, a PicoBench-based benchmark project for comparing PicoLog handoff costs against Microsoft.Extensions.Logging baselines.
+
+- `MicrosoftAsyncHandoff` is the lightweight string-channel MEL baseline.
+- `MicrosoftAsyncEntryHandoff` is the fairer full-entry MEL baseline that mirrors PicoLog's timestamp/category/message envelope cost without adding real I/O.
+- `PicoWaitControl_CachedMessage` and `PicoWaitHandoff_CachedMessage` cover PicoLog wait-mode backpressure as a relative comparison.
+
+Run the benchmark project:
+
+```bash
+dotnet run -c Release --project benchmarks/PicoLog.Benchmarks
+```
+
+Or publish and execute the artifact directly:
+
+```bash
+dotnet publish benchmarks/PicoLog.Benchmarks/PicoLog.Benchmarks.csproj -c Release -r win-x64
+benchmarks/PicoLog.Benchmarks/bin/Release/net10.0/win-x64/publish/PicoLog.Benchmarks.exe main
+```
+
+The benchmark app writes:
+
+- `benchmark-results.md`
+- `benchmark-results-main.md`
+- `benchmark-results-wait.md`
 
 ## Fit and Non-Goals
 
