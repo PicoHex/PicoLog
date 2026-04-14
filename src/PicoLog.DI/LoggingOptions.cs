@@ -2,8 +2,6 @@ namespace PicoLog.DI;
 
 public sealed class LoggingOptions
 {
-    private bool _hasExplicitFilePath;
-
     public LogLevel MinLevel
     {
         get => Factory.MinLevel;
@@ -24,20 +22,18 @@ public sealed class LoggingOptions
         set
         {
             File.FilePath = value;
-            _hasExplicitFilePath = true;
             EnableFileSink = true;
         }
     }
 
     internal LoggingOptions CreateValidatedCopy()
     {
-        var hasExplicitFilePath = HasExplicitFilePath();
+        var hasExplicitFilePath = File.HasExplicitFilePath;
         var enableFileSink = EnableFileSink || hasExplicitFilePath;
         var copy = new LoggingOptions
         {
             UseColoredConsole = UseColoredConsole,
-            EnableFileSink = enableFileSink,
-            _hasExplicitFilePath = _hasExplicitFilePath
+            EnableFileSink = enableFileSink
         };
 
         var factory = Factory.CreateValidatedCopy();
@@ -63,7 +59,4 @@ public sealed class LoggingOptions
 
         return copy;
     }
-
-    private bool HasExplicitFilePath() =>
-        _hasExplicitFilePath || File.HasExplicitFilePath;
 }
