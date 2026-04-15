@@ -84,18 +84,23 @@ internal sealed class InternalLoggerQueue
 
     private LogWriteResult TryEnqueueSyncDropOldest(LogEntry entry)
     {
-        var wasAtCapacity = Volatile.Read(ref _queuedEntries) >= _queueCapacity;
-
         if (!_writer.TryWrite(entry))
             return DetermineFailedWriteResult();
 
         _runtime.RecordEntryAccepted();
+        while (true)
+        {
+            var queuedEntries = Volatile.Read(ref _queuedEntries);
 
-        if (wasAtCapacity)
-            return LogWriteResult.AcceptedAfterEviction;
+            if (queuedEntries >= _queueCapacity)
+                return LogWriteResult.AcceptedAfterEviction;
 
-        Interlocked.Increment(ref _queuedEntries);
-        return LogWriteResult.Accepted;
+            if (
+                Interlocked.CompareExchange(ref _queuedEntries, queuedEntries + 1, queuedEntries)
+                == queuedEntries
+            )
+                return LogWriteResult.Accepted;
+        }
     }
 
     private LogWriteResult TryEnqueueSyncDropWrite(LogEntry entry)

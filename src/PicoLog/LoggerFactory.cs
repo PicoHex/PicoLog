@@ -1,6 +1,6 @@
 ﻿namespace PicoLog;
 
-public sealed class LoggerFactory : ILoggerFactory, IDisposable, IAsyncDisposable
+public sealed class LoggerFactory : ILoggerFactory, IFlushableLoggerFactory, IDisposable, IAsyncDisposable
 {
     private readonly ILogSink[] _sinks;
     private readonly Lock _registrationsLock = new();
@@ -44,6 +44,55 @@ public sealed class LoggerFactory : ILoggerFactory, IDisposable, IAsyncDisposabl
     }
 
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+    public async ValueTask FlushAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(!_runtime.IsAcceptingWrites, this);
+        LoggerRegistration[] registrations;
+        List<Exception>? exceptions = null;
+
+        lock (_registrationsLock)
+        {
+            ObjectDisposedException.ThrowIf(!_runtime.IsAcceptingWrites, this);
+            registrations = [.. _registrations.Values];
+        }
+
+        var pipelineFlushTasks = registrations
+            .Select(registration => registration.Pipeline.FlushAsync(cancellationToken).AsTask())
+            .ToArray();
+
+        if (pipelineFlushTasks.Length != 0)
+        {
+            var whenAll = Task.WhenAll(pipelineFlushTasks);
+
+            try
+            {
+                await whenAll.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch when (whenAll.Exception is not null)
+            {
+                (exceptions ??= []).AddRange(whenAll.Exception.Flatten().InnerExceptions);
+            }
+        }
+
+        foreach (var sink in _runtime.Sinks)
+        {
+            if (sink is not IFlushableLogSink flushableSink)
+                continue;
+
+            try
+            {
+                await flushableSink.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                (exceptions ??= []).Add(ex);
+            }
+        }
+
+        if (exceptions is { Count: > 0 })
+            throw new AggregateException(exceptions);
+    }
 
     public async ValueTask DisposeAsync()
     {

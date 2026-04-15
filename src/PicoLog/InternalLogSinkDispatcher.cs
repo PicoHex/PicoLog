@@ -22,7 +22,7 @@ internal sealed class InternalLogSinkDispatcher
         }
     }
 
-    private async Task DispatchEntryAsync(LogEntry entry)
+    internal async Task DispatchEntryAsync(LogEntry entry)
     {
         foreach (var sink in _sinks)
             await WriteToSinkAsync(sink, entry).ConfigureAwait(false);
