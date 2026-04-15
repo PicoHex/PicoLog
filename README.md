@@ -12,6 +12,7 @@ A lightweight, AOT-friendly logging framework for .NET edge and IoT workloads. T
 
 - **AOT compatibility**: targets `net10.0` and avoids reflection-heavy infrastructure
 - **Bounded async pipeline**: loggers enqueue entries into a bounded channel and write to sinks on a background task
+- **Explicit flush companions**: `IFlushableLoggerFactory`, `IFlushableLogSink`, and best-effort `FlushAsync()` extensions make mid-run flush barriers explicit without conflating them with shutdown
 - **Structured properties**: optional key/value payloads flow through `LogEntry.Properties` and the built-in formatter output
 - **Built-in metrics**: the core package emits queue, drop, sink-failure, and shutdown metrics through `System.Diagnostics.Metrics`
 - **Minimal surface area**: only a few core abstractions need to be implemented to extend the system
@@ -79,7 +80,11 @@ logger.LogStructured(
         new("elapsedMs", 18.7)
     }
 );
+
+await loggerFactory.FlushAsync(); // barrier for entries accepted so far, not shutdown
 ```
+
+`FlushAsync()` on the factory is not disposal. It waits until entries accepted before the flush snapshot have crossed the factory pipeline, while `DisposeAsync()` remains the shutdown path for the final drain and resource release.
 
 ### DI Integration
 
@@ -113,8 +118,11 @@ structuredLogger.LogStructured(
     [new("tenant", "alpha"), new("attempt", 3)]
 );
 
+await scope.GetService<ILoggerFactory>().FlushAsync();
 await scope.GetService<ILoggerFactory>().DisposeAsync();
 ```
+
+The `ILoggerFactory` extension `FlushAsync()` is best-effort. It forwards to `IFlushableLoggerFactory` when supported and otherwise completes immediately.
 
 ## Configuration
 
@@ -131,21 +139,22 @@ await using var loggerFactory = new LoggerFactory(sinks)
 
 ### Lifecycle Ownership
 
-`LoggerFactory` owns cached per-category loggers, their per-category pipelines, the background drain tasks those pipelines run, and the registered sinks. Dispose the factory during shutdown to flush queued entries and release sink resources. Once disposal begins, new writes are rejected while already queued entries continue draining.
+`LoggerFactory` owns cached per-category loggers, their per-category pipelines, the background drain tasks those pipelines run, and the registered sinks. `FlushAsync()` is a mid-run barrier, not disposal. It waits for entries accepted before the flush snapshot to cross the factory pipeline. Use `DisposeAsync()` during shutdown for the final drain and sink resource release. Once disposal begins, new writes are rejected while already queued entries continue draining.
 
 ```csharp
 await using var loggerFactory = new LoggerFactory(sinks);
 
 var logger = new Logger<MyService>(loggerFactory);
 logger.Info("Starting up");
+await loggerFactory.FlushAsync();
 
-// queued entries are flushed when the factory is disposed;
-// writes that race with shutdown are rejected
+// FlushAsync is a barrier for accepted entries so far.
+// DisposeAsync performs final drain and rejects writes that race with shutdown.
 ```
 
 ### Queue Pressure
 
-`LoggerFactoryOptions.QueueFullMode` makes queue pressure handling explicit for both sync and async writes:
+`LoggerFactoryOptions.QueueFullMode` makes queue pressure handling explicit for both sync and async writes. `LogAsync()` and `LogStructuredAsync()` complete when logger-boundary handoff handling has finished there: the entry may have been accepted, dropped by queue policy, or rejected during shutdown, and `Wait` mode backpressure is accounted for at that boundary. They do not mean a sink has durably finished writing.
 
 - `DropOldest` keeps logging non-blocking by discarding the oldest queued entry. This is the default.
 - `DropWrite` rejects the new entry and reports the drop through `OnMessagesDropped`.
@@ -166,7 +175,7 @@ await using var loggerFactory = new LoggerFactory(sinks, options);
 
 - `ConsoleSink` writes plain formatted entries to standard output.
 - `ColoredConsoleSink` serializes color changes so console state does not leak across concurrent writes.
-- `FileSink` batches UTF-8 file writes on a background queue before flushing to disk. `AddLogging()` creates configured sinks inside the logger factory so the factory remains the single owner of their lifetime.
+- `FileSink` batches UTF-8 file writes on a background queue before flushing to disk and supports sink-level flush through `IFlushableLogSink`. `AddLogging()` creates configured sinks inside the logger factory so the factory remains the single owner of their lifetime.
 
 ### PicoDI Defaults
 
@@ -178,7 +187,7 @@ await using var loggerFactory = new LoggerFactory(sinks, options);
 - a console sink by default
 - an optional file sink when `FilePath` is configured
 
-When shutting down, dispose the resolved factory explicitly so queued log entries are flushed before process exit. Writes that arrive after shutdown begins are rejected instead of being accepted late.
+During the app lifetime, you can call `ILoggerFactory.FlushAsync()` as a best-effort barrier. It forwards to `IFlushableLoggerFactory` when available and otherwise completes immediately. When shutting down, dispose the resolved factory explicitly so queued log entries are drained before process exit. Writes that arrive after shutdown begins are rejected instead of being accepted late.
 
 You can enable file logging either through the optional `filePath` parameter, by setting `options.FilePath`, or by setting `options.File.FilePath` in the configure overload. An explicit file path is treated as opting into the file sink.
 
@@ -241,14 +250,16 @@ The shipped extension methods are defined on `ILogger` and `ILogger<T>`:
 - `Trace`, `Debug`, `Info`, `Notice`, `Warning`, `Error`, `Critical`, `Alert`, `Emergency`
 - Async counterparts such as `InfoAsync` and `ErrorAsync`
 - `LogStructured` and `LogStructuredAsync` as best-effort adapters that preserve properties when the runtime logger implements `IStructuredLogger`, and otherwise fall back to plain logging without structured payloads
+- Best-effort `FlushAsync()` extensions on `ILoggerFactory` and `ILogSink` that forward when the runtime type supports flushing and otherwise complete immediately
 
-If you need a strict structured-logging contract, depend on `IStructuredLogger` / `IStructuredLogger<T>` directly.
+If you need a strict structured-logging contract, depend on `IStructuredLogger` / `IStructuredLogger<T>` directly. If you need a strict flush contract, depend on `IFlushableLoggerFactory` or `IFlushableLogSink` directly.
 
 ### Overflow Behavior
 
 Both sync and async logging write into a bounded channel.
 
 - Sync `Log()` and async `LogAsync()` both follow `LoggerFactoryOptions.QueueFullMode`.
+- Completion of `LogAsync()` or `LogStructuredAsync()` means logger-boundary handoff handling has finished there. The entry may have been accepted, dropped by queue policy, or rejected during shutdown. It does not mean durable sink completion.
 - The default is `DropOldest`, which favors throughput and low caller latency over guaranteed delivery.
 - `Wait` makes backpressure visible to the caller by blocking sync writes until queue space becomes available or `SyncWriteTimeout` elapses, and by awaiting queue space for async writes until cancellation is requested.
 - `DropWrite` preserves older queued entries and reports dropped new entries through `OnMessagesDropped`.
@@ -327,8 +338,9 @@ dotnet test --solution ./PicoLog.slnx --configuration Release
 
 - Logger instances are cached per category inside `LoggerFactory`.
 - LoggerFactory owns one bounded channel, one category pipeline, and one background drain task per category.
-- Factory disposal flushes all active loggers before disposing sinks.
-- `FileSink` batches writes on its own bounded queue and flushes at batch boundaries or flush-interval boundaries.
+- `FlushAsync()` on the factory is a barrier for entries accepted before the flush snapshot, not a disposal shortcut.
+- Factory disposal still performs the final drain before disposing sinks.
+- `FileSink` batches writes on its own bounded queue, flushes at batch boundaries or flush-interval boundaries, and exposes sink-level flush through `IFlushableLogSink`.
 - Choosing `DropOldest`, `DropWrite`, or `Wait` is a throughput-vs-delivery tradeoff, not a correctness bug.
 
 ## Benchmarks
@@ -366,20 +378,21 @@ The benchmark app writes:
 - The project is AOT-friendly and avoids reflection-heavy infrastructure, which makes it a good fit for Native AOT, edge, and IoT workloads.
 - Structured properties and built-in metrics cover common operational needs without forcing a larger logging ecosystem into the application.
 - Queue pressure behavior is explicit rather than hidden. Callers can choose between `DropOldest`, `DropWrite`, and `Wait` depending on whether throughput or delivery matters more.
+- Flush semantics stay explicit. `FlushAsync()` is a barrier for already accepted work, while `DisposeAsync()` remains the shutdown path for final drain and resource release.
 - The built-in PicoDI integration stays thin and predictable instead of introducing a large hosting or configuration stack.
 
 ### Good Fit
 
 - Small to medium .NET applications that want a lightweight logging core without adopting a larger logging ecosystem.
 - Edge, IoT, desktop, and utility-style workloads where startup cost, binary size, and AOT compatibility matter.
-- Application logging scenarios where best-effort delivery is acceptable and explicit shutdown flushing is enough.
+- Application logging scenarios where best-effort delivery is acceptable, mid-run flush barriers are occasionally useful, and explicit shutdown draining is enough.
 - Teams that prefer a small set of primitives and are comfortable adding custom sinks or formatters as needed.
 
 ### Non-Goals and Weak Spots
 
 - This is not a full observability platform. It supports structured properties and a small built-in metrics surface, but it does not provide message-template parsing, enrichers, rolling file management, remote transport sinks, or deep integration with broader telemetry ecosystems.
 - It is not optimized for very high-cardinality logger categories. The current design creates one factory-owned category pipeline and one background drain task per category.
-- It is not a default fit for audit or compliance logging where silent loss is unacceptable. The default queue mode favors throughput, and stronger delivery guarantees require explicit configuration such as `Wait` or a dedicated sink strategy.
+- It is not a default fit for audit or compliance logging where silent loss is unacceptable. The default queue mode favors throughput, `LogAsync()` completion is not durable sink completion, and stronger delivery guarantees require explicit configuration such as `Wait` or a dedicated sink strategy.
 - Built-in metrics cover queue depth, accepted and dropped entries, sink failures, late writes during shutdown, and shutdown drain duration. They do not yet expose per-category metrics, sink latency histograms, or a larger end-to-end telemetry model.
 
 ## Extending PicoLog
@@ -387,13 +400,16 @@ The benchmark app writes:
 ### Custom Sink
 
 ```csharp
-public sealed class CustomSink : ILogSink
+public sealed class CustomSink : ILogSink, IFlushableLogSink
 {
     public Task WriteAsync(LogEntry entry, CancellationToken cancellationToken = default)
     {
         Console.WriteLine($"CUSTOM: {entry.Message}");
         return Task.CompletedTask;
     }
+
+    public ValueTask FlushAsync(CancellationToken cancellationToken = default)
+        => ValueTask.CompletedTask;
 
     public void Dispose() { }
 
@@ -402,7 +418,10 @@ public sealed class CustomSink : ILogSink
 
 var formatter = new ConsoleFormatter();
 await using var loggerFactory = new LoggerFactory([new CustomSink(), new FileSink(formatter)]);
+await loggerFactory.FlushAsync();
 ```
+
+If a sink does not implement `IFlushableLogSink`, the `ILogSink.FlushAsync()` extension is best-effort and completes immediately.
 
 ### Custom Formatter
 
@@ -426,6 +445,7 @@ The test suite currently covers:
 - structured payload capture and formatting
 - built-in metrics emission
 - scope capture and flush on factory disposal
+- flush barriers for accepted entries and best-effort flush extensions
 - rejecting writes after shutdown begins
 - sink failure isolation
 - async tail-message flushing
