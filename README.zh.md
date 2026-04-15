@@ -12,6 +12,7 @@
 
 - **AOT 兼容性**: 面向 `net10.0`，避免依赖大量反射的基础设施
 - **有界异步管线**: logger 会将条目加入有界通道，并由后台任务写入 sink
+- **显式刷新接口**: `IFlushableLoggerFactory`、`IFlushableLogSink` 和尽力而为的 `FlushAsync()` 扩展，让运行中的刷新屏障更明确，而不会与关闭过程混淆
 - **结构化属性**: 可选的键值负载会通过 `LogEntry.Properties` 以及内置格式化器输出流转
 - **内置指标**: 核心包会通过 `System.Diagnostics.Metrics` 发出队列、丢弃、sink 失败和关闭相关指标
 - **精简的表面积**: 只需实现少量核心抽象即可扩展整个系统
@@ -79,7 +80,11 @@ logger.LogStructured(
         new("elapsedMs", 18.7)
     }
 );
+
+await loggerFactory.FlushAsync(); // 当前已接受条目的屏障，不等同于关闭
 ```
+
+`FlushAsync()` 在 factory 上不是释放操作。它会等待刷新快照之前已被接受的条目穿过 factory 管线，而 `DisposeAsync()` 仍然是用于最终排空和释放资源的关闭路径。
 
 ### DI 集成
 
@@ -113,8 +118,11 @@ structuredLogger.LogStructured(
     [new("tenant", "alpha"), new("attempt", 3)]
 );
 
+await scope.GetService<ILoggerFactory>().FlushAsync();
 await scope.GetService<ILoggerFactory>().DisposeAsync();
 ```
+
+`ILoggerFactory` 上的 `FlushAsync()` 扩展是尽力而为的。支持 `IFlushableLoggerFactory` 时会转发，不支持时会立即完成。
 
 ## 配置
 
@@ -131,21 +139,22 @@ await using var loggerFactory = new LoggerFactory(sinks)
 
 ### 生命周期所有权
 
-`LoggerFactory` 拥有按类别缓存的 logger、它们各自的按类别管线、这些管线运行的后台排空任务，以及已注册的 sink。请在关闭期间释放 factory，以便刷新排队中的条目并释放 sink 资源。一旦开始释放，新的写入会被拒绝，而已经入队的条目会继续排空。
+`LoggerFactory` 拥有按类别缓存的 logger、它们各自的按类别管线、这些管线运行的后台排空任务，以及已注册的 sink。`FlushAsync()` 是运行中的屏障，不是释放。它会等待刷新快照之前已接受的条目穿过 factory 管线。关闭时请使用 `DisposeAsync()` 完成最终排空并释放 sink 资源。一旦开始释放，新的写入会被拒绝，而已经入队的条目会继续排空。
 
 ```csharp
 await using var loggerFactory = new LoggerFactory(sinks);
 
 var logger = new Logger<MyService>(loggerFactory);
 logger.Info("Starting up");
+await loggerFactory.FlushAsync();
 
-// queued entries are flushed when the factory is disposed;
-// writes that race with shutdown are rejected
+// FlushAsync 是当前已接受条目的屏障。
+// DisposeAsync 负责最终排空，并拒绝与关闭并发的写入。
 ```
 
 ### 队列压力
 
-`LoggerFactoryOptions.QueueFullMode` 明确规定了同步和异步写入在队列承压时的处理方式:
+`LoggerFactoryOptions.QueueFullMode` 明确规定了同步和异步写入在队列承压时的处理方式。`LogAsync()` 和 `LogStructuredAsync()` 完成时，表示 logger 边界的交接处理已经结束：条目可能已被接受、因队列策略被丢弃，或在关闭期间被拒绝，而 `Wait` 模式下的背压处理也在该边界完成，并不表示 sink 已经持久化完成:
 
 - `DropOldest` 会丢弃队列中最旧的条目，以保持日志写入非阻塞。这是默认值。
 - `DropWrite` 会拒绝新条目，并通过 `OnMessagesDropped` 报告丢弃情况。
@@ -166,7 +175,7 @@ await using var loggerFactory = new LoggerFactory(sinks, options);
 
 - `ConsoleSink` 会将纯文本格式化后的条目写到标准输出。
 - `ColoredConsoleSink` 会串行化颜色切换，避免控制台状态在并发写入之间泄漏。
-- `FileSink` 会先在后台队列中批量处理 UTF-8 文件写入，再刷新到磁盘。`AddLogging()` 会在 logger factory 内部创建已配置的 sink，因此 factory 仍然是其生命周期的唯一所有者。
+- `FileSink` 会先在后台队列中批量处理 UTF-8 文件写入，再刷新到磁盘，并通过 `IFlushableLogSink` 支持 sink 级别的刷新。`AddLogging()` 会在 logger factory 内部创建已配置的 sink，因此 factory 仍然是其生命周期的唯一所有者。
 
 ### PicoDI 默认注册
 
@@ -178,7 +187,7 @@ await using var loggerFactory = new LoggerFactory(sinks, options);
 - 默认的控制台 sink
 - 在配置 `FilePath` 时可选启用的文件 sink
 
-关闭时，请显式释放已解析的 factory，这样进程退出前会刷新排队中的日志条目。关闭开始后到达的写入会被拒绝，而不是在过晚时仍被接受。
+在应用运行期间，你可以把 `ILoggerFactory.FlushAsync()` 当作尽力而为的屏障来调用。可用时它会转发到 `IFlushableLoggerFactory`，否则会立即完成。关闭时，请显式释放已解析的 factory，这样进程退出前会排空排队中的日志条目。关闭开始后到达的写入会被拒绝，而不是在过晚时仍被接受。
 
 你可以通过可选的 `filePath` 参数、设置 `options.FilePath`，或在 configure 重载中设置 `options.File.FilePath` 来启用文件日志。显式文件路径会被视为主动启用文件 sink。
 
@@ -241,14 +250,16 @@ logger.LogStructured(
 - `Trace`, `Debug`, `Info`, `Notice`, `Warning`, `Error`, `Critical`, `Alert`, `Emergency`
 - 异步对应方法，例如 `InfoAsync` 和 `ErrorAsync`
 - `LogStructured` 和 `LogStructuredAsync` 作为尽力而为的适配器，当运行时 logger 实现了 `IStructuredLogger` 时会保留属性，否则会回退为不带结构化负载的普通日志
+- `ILoggerFactory` 和 `ILogSink` 上尽力而为的 `FlushAsync()` 扩展，在运行时类型支持刷新时会转发，否则会立即完成
 
-如果你需要严格的结构化日志契约，请直接依赖 `IStructuredLogger` / `IStructuredLogger<T>`。
+如果你需要严格的结构化日志契约，请直接依赖 `IStructuredLogger` / `IStructuredLogger<T>`。如果你需要严格的刷新契约，请直接依赖 `IFlushableLoggerFactory` 或 `IFlushableLogSink`。
 
 ### 溢出行为
 
 同步和异步日志都会写入一个有界通道。
 
 - 同步 `Log()` 和异步 `LogAsync()` 都遵循 `LoggerFactoryOptions.QueueFullMode`。
+- `LogAsync()` 或 `LogStructuredAsync()` 的完成，表示 logger 边界的交接处理已经结束。条目可能已被接受、因队列策略被丢弃，或在关闭期间被拒绝，并不表示 sink 已持久化完成。
 - 默认值是 `DropOldest`，它更偏向吞吐量和较低的调用方延迟，而不是保证交付。
 - `Wait` 会让调用方明确感受到背压，同步写入会阻塞到队列空间可用或 `SyncWriteTimeout` 到期，异步写入则会等待队列空间，直到请求取消。
 - `DropWrite` 会保留较早入队的条目，并通过 `OnMessagesDropped` 报告被丢弃的新条目。
@@ -327,8 +338,9 @@ dotnet test --solution ./PicoLog.slnx --configuration Release
 
 - `LoggerFactory` 内部会按类别缓存 logger 实例。
 - `LoggerFactory` 为每个类别拥有一个有界通道、一个类别管线和一个后台排空任务。
-- 释放 factory 时，会在释放 sink 之前刷新所有活跃 logger。
-- `FileSink` 在自身的有界队列上批量写入，并在批次边界或刷新间隔边界执行刷新。
+- factory 上的 `FlushAsync()` 是针对刷新快照之前已接受条目的屏障，不是释放的简写。
+- 释放 factory 仍然会在释放 sink 之前执行最终排空。
+- `FileSink` 在自身的有界队列上批量写入，会在批次边界或刷新间隔边界执行刷新，并通过 `IFlushableLogSink` 暴露 sink 级别刷新。
 - 选择 `DropOldest`、`DropWrite` 或 `Wait` 是吞吐量与交付能力之间的权衡，不是正确性缺陷。
 
 ## 基准测试
@@ -366,20 +378,21 @@ benchmarks/PicoLog.Benchmarks/bin/Release/net10.0/win-x64/publish/PicoLog.Benchm
 - 项目对 AOT 友好，并避免依赖大量反射的基础设施，因此很适合 Native AOT、边缘和 IoT 工作负载。
 - 结构化属性和内置指标覆盖了常见的运维需求，同时不会强迫应用接入更庞大的日志生态。
 - 队列压力行为是显式的，而不是隐藏的。调用方可以在 `DropOldest`、`DropWrite` 和 `Wait` 之间选择，取决于吞吐量还是交付更重要。
+- 刷新语义保持显式。`FlushAsync()` 是已接受工作的屏障，而 `DisposeAsync()` 仍然是负责最终排空和释放资源的关闭路径。
 - 内置 PicoDI 集成保持轻薄且可预测，不会引入庞大的托管或配置栈。
 
 ### 适用场景
 
 - 想要轻量日志核心、又不想引入更大日志生态的小型到中型 .NET 应用。
 - 对启动成本、二进制大小和 AOT 兼容性有要求的边缘、IoT、桌面和工具类工作负载。
-- 可以接受尽力交付，并且显式关闭刷新已经足够的应用日志场景。
+- 可以接受尽力交付、偶尔需要运行中刷新屏障，并且显式关闭排空已经足够的应用日志场景。
 - 偏好少量基础原语，并愿意按需添加自定义 sink 或格式化器的团队。
 
 ### 非目标与薄弱点
 
 - 这不是一个完整的可观测性平台。它支持结构化属性和一小组内置指标，但不提供消息模板解析、enricher、滚动文件管理、远程传输 sink，或与更广泛遥测生态的深度集成。
 - 它没有针对超高基数的 logger 类别进行优化。当前设计会为每个类别创建一个 factory 拥有的类别管线和一个后台排空任务。
-- 对于不能接受静默丢失的审计或合规日志场景，它并不是默认合适的选择。默认队列模式偏向吞吐量，而更强的交付保证需要显式配置，例如 `Wait` 或专用 sink 策略。
+- 对于不能接受静默丢失的审计或合规日志场景，它并不是默认合适的选择。默认队列模式偏向吞吐量，`LogAsync()` 完成也不表示 sink 已持久化完成，而更强的交付保证需要显式配置，例如 `Wait` 或专用 sink 策略。
 - 内置指标覆盖队列深度、已接受和已丢弃条目、sink 失败、关闭期间的迟到写入以及关闭排空时长。它们目前还没有提供按类别划分的指标、sink 延迟直方图或更大的端到端遥测模型。
 
 ## 扩展 PicoLog
@@ -387,13 +400,16 @@ benchmarks/PicoLog.Benchmarks/bin/Release/net10.0/win-x64/publish/PicoLog.Benchm
 ### 自定义 Sink
 
 ```csharp
-public sealed class CustomSink : ILogSink
+public sealed class CustomSink : ILogSink, IFlushableLogSink
 {
     public Task WriteAsync(LogEntry entry, CancellationToken cancellationToken = default)
     {
         Console.WriteLine($"CUSTOM: {entry.Message}");
         return Task.CompletedTask;
     }
+
+    public ValueTask FlushAsync(CancellationToken cancellationToken = default)
+        => ValueTask.CompletedTask;
 
     public void Dispose() { }
 
@@ -402,7 +418,10 @@ public sealed class CustomSink : ILogSink
 
 var formatter = new ConsoleFormatter();
 await using var loggerFactory = new LoggerFactory([new CustomSink(), new FileSink(formatter)]);
+await loggerFactory.FlushAsync();
 ```
+
+如果 sink 没有实现 `IFlushableLogSink`，`ILogSink.FlushAsync()` 扩展会以尽力而为方式立即完成。
 
 ### 自定义格式化器
 
@@ -426,6 +445,7 @@ public class CustomFormatter : ILogFormatter
 - 结构化负载捕获与格式化
 - 内置指标发出
 - 在 factory 释放时捕获 scope 并完成刷新
+- 已接受条目的刷新屏障和尽力而为的刷新扩展
 - 在关闭开始后拒绝写入
 - sink 失败隔离
 - 异步尾部消息刷新

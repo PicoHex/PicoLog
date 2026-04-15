@@ -12,6 +12,7 @@
 
 - **AOT 互換性**: `net10.0` を対象とし、リフレクション依存の重い基盤を避けます
 - **有界非同期パイプライン**: logger はエントリを有界チャネルに投入し、バックグラウンドタスクで sink に書き込みます
+- **明示的な flush 補助インターフェイス**: `IFlushableLoggerFactory`、`IFlushableLogSink`、best-effort の `FlushAsync()` 拡張により、実行中の flush barrier を shutdown と混同せず明示できます
 - **構造化プロパティ**: 任意のキー/値ペイロードは `LogEntry.Properties` と組み込みフォーマッタ出力を通じて流れます
 - **組み込みメトリクス**: コアパッケージは `System.Diagnostics.Metrics` を通じてキュー、ドロップ、sink failure、shutdown のメトリクスを発行します
 - **最小限の表面積**: システムを拡張するために実装すべきコア抽象はごく少数です
@@ -79,7 +80,11 @@ logger.LogStructured(
         new("elapsedMs", 18.7)
     }
 );
+
+await loggerFactory.FlushAsync(); // ここまでに受理されたエントリの barrier であり、shutdown ではありません
 ```
+
+factory 上の `FlushAsync()` は破棄ではありません。flush snapshot より前に受理されたエントリが factory pipeline を通過するまで待機します。`DisposeAsync()` は引き続き最終 drain とリソース解放のための shutdown パスです。
 
 ### DI 統合
 
@@ -113,8 +118,11 @@ structuredLogger.LogStructured(
     [new("tenant", "alpha"), new("attempt", 3)]
 );
 
+await scope.GetService<ILoggerFactory>().FlushAsync();
 await scope.GetService<ILoggerFactory>().DisposeAsync();
 ```
+
+`ILoggerFactory` の `FlushAsync()` 拡張は best-effort です。`IFlushableLoggerFactory` をサポートしていれば転送し、そうでなければ即座に完了します。
 
 ## 構成
 
@@ -131,21 +139,22 @@ await using var loggerFactory = new LoggerFactory(sinks)
 
 ### ライフサイクルの所有権
 
-`LoggerFactory` は、カテゴリごとにキャッシュされた logger、それぞれのカテゴリ別パイプライン、それらのパイプラインで動作するバックグラウンド drain task、そして登録済み sink を所有します。シャットダウン時には factory を破棄し、キュー済みエントリを flush して sink リソースを解放してください。破棄が始まると、新しい書き込みは拒否され、すでにキューに入っているエントリだけが drain を続けます。
+`LoggerFactory` は、カテゴリごとにキャッシュされた logger、それぞれのカテゴリ別パイプライン、それらのパイプラインで動作するバックグラウンド drain task、そして登録済み sink を所有します。`FlushAsync()` は実行中の barrier であり、破棄ではありません。flush snapshot より前に受理されたエントリが factory pipeline を通過するまで待機します。shutdown 時には `DisposeAsync()` を使って最終 drain と sink リソース解放を行ってください。破棄が始まると、新しい書き込みは拒否され、すでにキューに入っているエントリだけが drain を続けます。
 
 ```csharp
 await using var loggerFactory = new LoggerFactory(sinks);
 
 var logger = new Logger<MyService>(loggerFactory);
 logger.Info("Starting up");
+await loggerFactory.FlushAsync();
 
-// queued entries are flushed when the factory is disposed;
-// writes that race with shutdown are rejected
+// FlushAsync は、ここまでに受理されたエントリの barrier です。
+// DisposeAsync は最終 drain を行い、shutdown と競合する書き込みを拒否します。
 ```
 
 ### キュー圧力
 
-`LoggerFactoryOptions.QueueFullMode` は、同期書き込みと非同期書き込みの両方におけるキュー圧力時の挙動を明示します。
+`LoggerFactoryOptions.QueueFullMode` は、同期書き込みと非同期書き込みの両方におけるキュー圧力時の挙動を明示します。`LogAsync()` と `LogStructuredAsync()` の完了は、logger 境界での handoff 処理が完了したことを意味します。エントリは受理されることもあれば、キューポリシーで破棄されたり、shutdown 中に拒否されたりする可能性があり、`Wait` モードのバックプレッシャー処理もその境界で完了します。sink への永続書き込み完了を意味するわけではありません。
 
 - `DropOldest` は、最も古いキュー済みエントリを破棄することで、非ブロッキングなロギングを維持します。これが既定値です。
 - `DropWrite` は新しいエントリを拒否し、`OnMessagesDropped` を通じてドロップを報告します。
@@ -166,7 +175,7 @@ await using var loggerFactory = new LoggerFactory(sinks, options);
 
 - `ConsoleSink` はプレーンに整形されたエントリを標準出力へ書き込みます。
 - `ColoredConsoleSink` は色変更を直列化し、同時書き込み間でコンソール状態が漏れないようにします。
-- `FileSink` は UTF-8 のファイル書き込みをバックグラウンドキューでバッチ化してからディスクへ flush します。`AddLogging()` は構成済み sink を logger factory 内で生成するため、factory がそのライフサイクルの唯一の所有者であり続けます。
+- `FileSink` は UTF-8 のファイル書き込みをバックグラウンドキューでバッチ化してからディスクへ flush し、`IFlushableLogSink` による sink レベル flush もサポートします。`AddLogging()` は構成済み sink を logger factory 内で生成するため、factory がそのライフサイクルの唯一の所有者であり続けます。
 
 ### PicoDI の既定登録
 
@@ -178,7 +187,7 @@ await using var loggerFactory = new LoggerFactory(sinks, options);
 - 既定の console sink
 - `FilePath` が構成されている場合の任意の file sink
 
-シャットダウン時には、解決済みの factory を明示的に破棄してください。これにより、プロセス終了前にキュー済みログエントリが flush されます。シャットダウン開始後に到着した書き込みは、遅れて受け付けられるのではなく拒否されます。
+アプリケーションの実行中は、`ILoggerFactory.FlushAsync()` を best-effort の barrier として呼び出せます。利用可能なら `IFlushableLoggerFactory` に転送し、そうでなければ即座に完了します。シャットダウン時には、解決済みの factory を明示的に破棄してください。これにより、プロセス終了前にキュー済みログエントリが drain されます。シャットダウン開始後に到着した書き込みは、遅れて受け付けられるのではなく拒否されます。
 
 ファイルロギングは、任意の `filePath` パラメータ、`options.FilePath` の設定、または configure オーバーロード内での `options.File.FilePath` の設定で有効化できます。明示的なファイルパスは file sink へのオプトインとして扱われます。
 
@@ -241,14 +250,16 @@ logger.LogStructured(
 - `Trace`, `Debug`, `Info`, `Notice`, `Warning`, `Error`, `Critical`, `Alert`, `Emergency`
 - `InfoAsync` や `ErrorAsync` などの非同期版
 - `LogStructured` と `LogStructuredAsync` は best-effort アダプタとして動作し、ランタイム logger が `IStructuredLogger` を実装している場合はプロパティを保持し、それ以外では構造化ペイロードなしの通常ロギングへフォールバックします
+- `ILoggerFactory` と `ILogSink` に対する best-effort の `FlushAsync()` 拡張は、ランタイム型が flush をサポートしていれば転送し、そうでなければ即座に完了します
 
-厳密な構造化ロギング契約が必要な場合は、`IStructuredLogger` / `IStructuredLogger<T>` に直接依存してください。
+厳密な構造化ロギング契約が必要な場合は、`IStructuredLogger` / `IStructuredLogger<T>` に直接依存してください。厳密な flush 契約が必要な場合は、`IFlushableLoggerFactory` または `IFlushableLogSink` に直接依存してください。
 
 ### オーバーフロー時の挙動
 
 同期ロギングと非同期ロギングはいずれも有界チャネルに書き込みます。
 
 - 同期 `Log()` と非同期 `LogAsync()` はどちらも `LoggerFactoryOptions.QueueFullMode` に従います。
+- `LogAsync()` または `LogStructuredAsync()` の完了は、logger 境界での handoff 処理が完了したことを意味します。エントリは受理されることもあれば、キューポリシーで破棄されたり、shutdown 中に拒否されたりする可能性があります。sink の永続完了を意味するものではありません。
 - 既定値は `DropOldest` で、保証された配信よりもスループットと低い呼び出し元レイテンシを優先します。
 - `Wait` は、同期書き込みではキューに空きができるか `SyncWriteTimeout` が経過するまでブロックし、非同期書き込みではキャンセルが要求されるまでキューの空きを待つことで、バックプレッシャーを呼び出し元に可視化します。
 - `DropWrite` は古いキュー済みエントリを保持し、新たにドロップされたエントリを `OnMessagesDropped` を通じて報告します。
@@ -327,8 +338,9 @@ dotnet test --solution ./PicoLog.slnx --configuration Release
 
 - logger インスタンスは `LoggerFactory` 内でカテゴリごとにキャッシュされます。
 - `LoggerFactory` はカテゴリごとに 1 つの有界チャネル、1 つのカテゴリパイプライン、1 つのバックグラウンド drain task を所有します。
-- factory の破棄時には、sink を破棄する前にすべてのアクティブ logger が flush されます。
-- `FileSink` は独自の有界キューで書き込みをバッチ化し、バッチ境界または flush interval 境界で flush します。
+- factory 上の `FlushAsync()` は、flush snapshot より前に受理されたエントリに対する barrier であり、破棄の近道ではありません。
+- factory の破棄は引き続き sink を破棄する前に最終 drain を行います。
+- `FileSink` は独自の有界キューで書き込みをバッチ化し、バッチ境界または flush interval 境界で flush し、`IFlushableLogSink` による sink レベル flush も公開します。
 - `DropOldest`、`DropWrite`、`Wait` の選択は、スループットと配信保証のトレードオフであり、正しさのバグではありません。
 
 ## ベンチマーク
@@ -366,20 +378,21 @@ benchmarks/PicoLog.Benchmarks/bin/Release/net10.0/win-x64/publish/PicoLog.Benchm
 - このプロジェクトは AOT フレンドリーで、リフレクション依存の重い基盤を避けているため、Native AOT、edge、IoT ワークロードに適しています。
 - 構造化プロパティと組み込みメトリクスは、より大きなロギングエコシステムをアプリケーションに強制することなく、一般的な運用要件をカバーします。
 - キュー圧力時の挙動は隠されず明示的です。呼び出し元は、スループットと配信のどちらを重視するかに応じて `DropOldest`、`DropWrite`、`Wait` を選べます。
+- flush の意味も明示的です。`FlushAsync()` はすでに受理された作業に対する barrier であり、`DisposeAsync()` は最終 drain とリソース解放のための shutdown パスのままです。
 - 組み込みの PicoDI 統合は、大規模な hosting や configuration スタックを導入せず、薄く予測可能なままです。
 
 ### 適しているケース
 
 - より大きなロギングエコシステムを採用せずに、軽量なロギングコアを求める小〜中規模の .NET アプリケーション
 - 起動コスト、バイナリサイズ、AOT 互換性が重要な edge、IoT、desktop、utility 系ワークロード
-- best-effort 配信が許容され、明示的な shutdown flush で十分なアプリケーションロギングのシナリオ
+- best-effort 配信が許容され、実行中の flush barrier が時々役に立ち、明示的な shutdown drain で十分なアプリケーションロギングのシナリオ
 - 少数のプリミティブを好み、必要に応じて custom sink や formatter を追加することに抵抗がないチーム
 
 ### 非目標と弱点
 
 - これは完全な observability platform ではありません。構造化プロパティと小規模な組み込みメトリクス面はサポートしますが、message-template parsing、enricher、rolling file management、remote transport sink、または広範なテレメトリエコシステムとの深い統合は提供しません。
 - 非常に高いカーディナリティの logger category には最適化されていません。現在の設計では、カテゴリごとに factory 所有の category pipeline とバックグラウンド drain task を 1 つずつ作成します。
-- 静かな損失が許容されない audit や compliance logging には既定では適していません。既定の queue mode はスループットを優先し、より強い配信保証には `Wait` や専用 sink 戦略のような明示的構成が必要です。
+- 静かな損失が許容されない audit や compliance logging には既定では適していません。既定の queue mode はスループットを優先し、`LogAsync()` の完了は sink の永続完了ではなく、より強い配信保証には `Wait` や専用 sink 戦略のような明示的構成が必要です。
 - 組み込みメトリクスは queue depth、受理・ドロップされたエントリ、sink failure、shutdown 中の遅延書き込み、shutdown drain duration をカバーします。まだカテゴリ別メトリクス、sink latency histogram、より大きな end-to-end telemetry model は公開していません。
 
 ## PicoLog を拡張する
@@ -387,13 +400,16 @@ benchmarks/PicoLog.Benchmarks/bin/Release/net10.0/win-x64/publish/PicoLog.Benchm
 ### カスタム Sink
 
 ```csharp
-public sealed class CustomSink : ILogSink
+public sealed class CustomSink : ILogSink, IFlushableLogSink
 {
     public Task WriteAsync(LogEntry entry, CancellationToken cancellationToken = default)
     {
         Console.WriteLine($"CUSTOM: {entry.Message}");
         return Task.CompletedTask;
     }
+
+    public ValueTask FlushAsync(CancellationToken cancellationToken = default)
+        => ValueTask.CompletedTask;
 
     public void Dispose() { }
 
@@ -402,7 +418,10 @@ public sealed class CustomSink : ILogSink
 
 var formatter = new ConsoleFormatter();
 await using var loggerFactory = new LoggerFactory([new CustomSink(), new FileSink(formatter)]);
+await loggerFactory.FlushAsync();
 ```
+
+sink が `IFlushableLogSink` を実装していない場合、`ILogSink.FlushAsync()` 拡張は best-effort として即座に完了します。
 
 ### カスタムフォーマッタ
 
@@ -426,6 +445,7 @@ public class CustomFormatter : ILogFormatter
 - 構造化ペイロードのキャプチャと整形
 - 組み込みメトリクスの発行
 - factory 破棄時の scope キャプチャと flush
+- 受理済みエントリに対する flush barrier と best-effort flush 拡張
 - shutdown 開始後の書き込み拒否
 - sink failure の分離
 - 末尾メッセージの非同期 flush
