@@ -12,7 +12,7 @@
 
     <ItemGroup>
       <PackageReference Include="PicoDI" Version="2026.2.2" />
-      <PackageReference Include="TUnit" Version="1.33.0" />
+      <PackageReference Include="TUnit" Version="1.34.5" />
     </ItemGroup>
 
     <ItemGroup>
