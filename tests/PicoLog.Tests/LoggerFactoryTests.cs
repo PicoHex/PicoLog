@@ -941,7 +941,7 @@ public sealed class LoggerFactoryTests
         try
         {
             ISvcContainer container = new SvcContainer();
-            PicoLog.DI.SvcContainerExtensions.AddLogging(container, LogLevel.Info, filePath);
+            container.AddLogging(LogLevel.Info, filePath);
             container.RegisterScoped<LoggerConsumer, LoggerConsumer>();
 
             await using var scope = container.CreateScope();
@@ -968,7 +968,7 @@ public sealed class LoggerFactoryTests
         try
         {
             ISvcContainer container = new SvcContainer();
-            PicoLog.DI.SvcContainerExtensions.AddLogging(container, LogLevel.Info, filePath);
+            container.AddLogging(LogLevel.Info, filePath);
 
             await using var scope = container.CreateScope();
             var factory = (ILoggerFactory)scope.GetService(typeof(ILoggerFactory));
@@ -1026,7 +1026,7 @@ public sealed class LoggerFactoryTests
         try
         {
             ISvcContainer container = new SvcContainer();
-            PicoLog.DI.SvcContainerExtensions.AddLogging(container, LogLevel.Warning, filePath);
+            container.AddLogging(LogLevel.Warning, filePath);
             container.RegisterScoped<LoggerConsumer, LoggerConsumer>();
 
             await using var scope = container.CreateScope();

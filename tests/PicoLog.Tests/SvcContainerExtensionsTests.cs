@@ -2,6 +2,11 @@ namespace PicoLog.Tests;
 
 public sealed class SvcContainerExtensionsTests
 {
+    private sealed class PrefixFormatter(string prefix) : ILogFormatter
+    {
+        public string Format(LogEntry entry) => $"{prefix}|{entry.Level}|{entry.Category}|{entry.Message}";
+    }
+
     [Test]
     public async Task AddLogging_ReturnsTheSameContainerInstance()
     {
@@ -10,10 +15,7 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            var result = PicoLog
-                .DI
-                .SvcContainerExtensions
-                .AddLogging(container, LogLevel.Info, filePath);
+            var result = container.AddLogging(LogLevel.Info, filePath);
 
             await Assert.That(result).IsSameReferenceAs(container);
         }
@@ -33,7 +35,7 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            PicoLog.DI.SvcContainerExtensions.AddLogging(container, LogLevel.Info, " ");
+            container.AddLogging(LogLevel.Info, " ");
         }
         catch (ArgumentException ex)
         {
@@ -52,22 +54,16 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            PicoLog
-                .DI
-                .SvcContainerExtensions
-                .AddLogging(
-                    container,
-                    options =>
-                    {
-                        options.MinLevel = LogLevel.Warning;
-                        options.UseColoredConsole = false;
-                        options.FilePath = filePath;
-                        options.Factory.QueueCapacity = 8;
-                        options.Factory.QueueFullMode = LogQueueFullMode.Wait;
-                        options.File.BatchSize = 4;
-                        options.File.FlushInterval = TimeSpan.FromMilliseconds(5);
-                    }
-                );
+            container.AddLogging(options =>
+            {
+                options.MinLevel = LogLevel.Warning;
+                options.UseColoredConsole = false;
+                options.FilePath = filePath;
+                options.Factory.QueueCapacity = 8;
+                options.Factory.QueueFullMode = LogQueueFullMode.Wait;
+                options.File.BatchSize = 4;
+                options.File.FlushInterval = TimeSpan.FromMilliseconds(5);
+            });
 
             await using var scope = container.CreateScope();
             var factory = (ILoggerFactory)scope.GetService(typeof(ILoggerFactory));
@@ -94,14 +90,11 @@ public sealed class SvcContainerExtensionsTests
     {
         ISvcContainer container = new SvcContainer();
 
-        PicoLog.DI.SvcContainerExtensions.AddLogging(
-            container,
-            options =>
-            {
-                options.MinLevel = LogLevel.Info;
-                options.UseColoredConsole = false;
-            }
-        );
+        container.AddLogging(options =>
+        {
+            options.MinLevel = LogLevel.Info;
+            options.UseColoredConsole = false;
+        });
 
         await using var scope = container.CreateScope();
         var factory = (LoggerFactory)scope.GetService(typeof(ILoggerFactory));
@@ -122,13 +115,10 @@ public sealed class SvcContainerExtensionsTests
     {
         ISvcContainer container = new SvcContainer();
 
-        PicoLog.DI.SvcContainerExtensions.AddLogging(
-            container,
-            options =>
-            {
-                options.MinLevel = LogLevel.Info;
-            }
-        );
+        container.AddLogging(options =>
+        {
+            options.MinLevel = LogLevel.Info;
+        });
 
         await using var scope = container.CreateScope();
         var factory = (LoggerFactory)scope.GetService(typeof(ILoggerFactory));
@@ -152,15 +142,12 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            PicoLog.DI.SvcContainerExtensions.AddLogging(
-                container,
-                options =>
-                {
-                    options.UseColoredConsole = false;
-                    options.Factory.MinLevel = LogLevel.Error;
-                    options.FilePath = filePath;
-                }
-            );
+            container.AddLogging(options =>
+            {
+                options.UseColoredConsole = false;
+                options.Factory.MinLevel = LogLevel.Error;
+                options.FilePath = filePath;
+            });
 
             await using var scope = container.CreateScope();
             var factory = (ILoggerFactory)scope.GetService(typeof(ILoggerFactory));
@@ -191,13 +178,10 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            PicoLog.DI.SvcContainerExtensions.AddLogging(
-                container,
-                options =>
-                {
-                    options.EnableFileSink = true;
-                }
-            );
+            container.AddLogging(options =>
+            {
+                options.EnableFileSink = true;
+            });
         }
         catch (InvalidOperationException ex)
         {
@@ -216,15 +200,12 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            PicoLog.DI.SvcContainerExtensions.AddLogging(
-                container,
-                options =>
-                {
-                    options.MinLevel = LogLevel.Info;
-                    options.UseColoredConsole = false;
-                    options.File.FilePath = filePath;
-                }
-            );
+            container.AddLogging(options =>
+            {
+                options.MinLevel = LogLevel.Info;
+                options.UseColoredConsole = false;
+                options.File.FilePath = filePath;
+            });
 
             await using var scope = container.CreateScope();
             var factory = (ILoggerFactory)scope.GetService(typeof(ILoggerFactory));
@@ -252,15 +233,12 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            PicoLog.DI.SvcContainerExtensions.AddLogging(
-                container,
-                options =>
-                {
-                    options.MinLevel = LogLevel.Info;
-                    options.UseColoredConsole = false;
-                    options.FilePath = filePath;
-                }
-            );
+            container.AddLogging(options =>
+            {
+                options.MinLevel = LogLevel.Info;
+                options.UseColoredConsole = false;
+                options.FilePath = filePath;
+            });
 
             await using var scope = container.CreateScope();
             var structuredLogger = scope.GetService<IStructuredLogger<LoggerConsumer>>();
@@ -286,6 +264,84 @@ public sealed class SvcContainerExtensionsTests
     }
 
     [Test]
+    public async Task AddLogging_ResolvesFlushableLoggerFactory_AsSameInstanceAsILoggerFactory()
+    {
+        ISvcContainer container = new SvcContainer();
+
+        container.AddLogging(options =>
+        {
+            options.MinLevel = LogLevel.Info;
+            options.UseColoredConsole = false;
+        });
+
+        await using var scope = container.CreateScope();
+        var loggerFactory = scope.GetService<ILoggerFactory>();
+        var flushableFactory = scope.GetService<IFlushableLoggerFactory>();
+
+        await Assert.That(loggerFactory).IsNotNull();
+        await Assert.That(flushableFactory).IsNotNull();
+        await Assert.That(flushableFactory).IsSameReferenceAs(loggerFactory);
+
+        await loggerFactory.DisposeAsync();
+    }
+
+    [Test]
+    public async Task AddLogging_ConfigureOverload_UsesConfiguredFormatter_ForFileSinkOutput()
+    {
+        ISvcContainer container = new SvcContainer();
+        var filePath = Path.Combine(Path.GetTempPath(), $"pico-logger-di-{Guid.NewGuid():N}.log");
+
+        try
+        {
+            container.AddLogging(options =>
+            {
+                options.MinLevel = LogLevel.Info;
+                options.UseColoredConsole = false;
+                options.FilePath = filePath;
+                options.Formatter = new PrefixFormatter("custom");
+            });
+
+            await using var scope = container.CreateScope();
+            var factory = scope.GetService<ILoggerFactory>();
+            var logger = factory.CreateLogger("Tests.Category");
+
+            await logger.WarningAsync("formatted-message");
+            await factory.DisposeAsync();
+
+            var contents = await File.ReadAllTextAsync(filePath);
+            await Assert.That(contents).Contains("custom|Warning|Tests.Category|formatted-message");
+        }
+        finally
+        {
+            if (File.Exists(filePath))
+                File.Delete(filePath);
+        }
+    }
+
+    [Test]
+    public async Task AddLogging_ThrowsWhenFormatterIsNull()
+    {
+        ISvcContainer container = new SvcContainer();
+
+        ArgumentNullException? exception = null;
+
+        try
+        {
+            container.AddLogging(options =>
+            {
+                options.Formatter = null!;
+            });
+        }
+        catch (ArgumentNullException ex)
+        {
+            exception = ex;
+        }
+
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.ParamName).IsEqualTo("Formatter");
+    }
+
+    [Test]
     public async Task AddLogging_ConfigureOverload_ExplicitTopLevelFilePath_RemainsFileSinkOptIn_WhenEnableFlagIsReset()
     {
         ISvcContainer container = new SvcContainer();
@@ -293,16 +349,13 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            PicoLog.DI.SvcContainerExtensions.AddLogging(
-                container,
-                options =>
-                {
-                    options.MinLevel = LogLevel.Info;
-                    options.UseColoredConsole = false;
-                    options.FilePath = filePath;
-                    options.EnableFileSink = false;
-                }
-            );
+            container.AddLogging(options =>
+            {
+                options.MinLevel = LogLevel.Info;
+                options.UseColoredConsole = false;
+                options.FilePath = filePath;
+                options.EnableFileSink = false;
+            });
 
             await using var scope = container.CreateScope();
             var factory = (ILoggerFactory)scope.GetService(typeof(ILoggerFactory));
