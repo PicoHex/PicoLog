@@ -16,7 +16,7 @@ Un marco de logging ligero y compatible con AOT para cargas de trabajo .NET en e
 - **Propiedades estructuradas**: las cargas opcionales de clave/valor fluyen a través de `LogEntry.Properties` y de la salida del formateador integrado
 - **Métricas integradas**: el paquete principal emite métricas de cola, descarte, fallos de sink y apagado mediante `System.Diagnostics.Metrics`
 - **Superficie mínima**: solo hace falta implementar unas pocas abstracciones principales para ampliar el sistema
-- **Integración con PicoDI**: registros integrados para la logger factory y loggers tipados, con logging a consola por defecto y logging a archivo opcional cuando se configura una ruta de archivo
+- **Integración con PicoDI**: registros integrados para la logger factory y loggers tipados, con configuración de sinks mediante `WriteTo` y un puente opcional de `ReadFrom.RegisteredSinks()` para sinks registrados en PicoDI
 - **Cobertura de benchmarks**: incluye un proyecto de benchmarks basado en PicoBench con líneas base MEL de handoff asíncrono ligeras y más justas
 - **Soporte de scopes**: los scopes anidados fluyen mediante `AsyncLocal` y se adjuntan a cada `LogEntry`
 
@@ -99,10 +99,10 @@ ISvcContainer container = new SvcContainer();
 container.AddLogging(options =>
 {
     options.MinLevel = LogLevel.Info;
-    options.FilePath = "logs/app.log";
-    options.UseColoredConsole = true;
     options.Factory.QueueFullMode = LogQueueFullMode.Wait;
     options.File.BatchSize = 64;
+    options.WriteTo.ColoredConsole();
+    options.WriteTo.File("logs/app.log");
 });
 container.RegisterScoped<IMyService, MyService>();
 
@@ -184,30 +184,31 @@ await using var loggerFactory = new LoggerFactory(sinks, options);
 - un `ILoggerFactory` singleton
 - adaptadores tipados `ILogger<T>`
 - adaptadores tipados `IStructuredLogger<T>`
-- un sink de consola por defecto
-- un sink de archivo opcional cuando `FilePath` está configurado
+- sinks predeterminados heredados cuando no se configura una canalización explícita de sinks
+- sinks ya registrados en PicoDI cuando se habilita `ReadFrom.RegisteredSinks()`
 
 Durante la vida de la aplicación, puedes llamar a `ILoggerFactory.FlushAsync()` como barrera best-effort. Reenvía a `IFlushableLoggerFactory` cuando está disponible y, si no, se completa de inmediato. Al apagar, desecha explícitamente la factory resuelta para que las entradas de log en cola se drenen antes de que termine el proceso. Las escrituras que lleguen después de iniciado el apagado se rechazan en lugar de aceptarse tarde.
 
-Puedes habilitar logging a archivo mediante el parámetro opcional `filePath`, estableciendo `options.FilePath` o estableciendo `options.File.FilePath` en la sobrecarga de configuración. Una ruta de archivo explícita se trata como una activación explícita del sink de archivo.
-
-```csharp
-container.AddLogging(LogLevel.Info, "logs/app.log");
-```
+Para código nuevo, usa preferentemente el builder de sinks `WriteTo` para que los sinks integrados y personalizados compartan la misma ruta de configuración.
 
 ```csharp
 container.AddLogging(options =>
 {
     options.MinLevel = LogLevel.Info;
-    options.FilePath = "logs/app.log";
+    options.WriteTo.ColoredConsole();
+    options.WriteTo.File("logs/app.log");
 });
 ```
 
+Si ya registraste sinks en PicoDI, puedes incorporarlos a la canalización de logging mediante `ReadFrom.RegisteredSinks()`.
+
 ```csharp
+container.Register(new SvcDescriptor(typeof(ILogSink), _ => new AuditSink()));
+
 container.AddLogging(options =>
 {
-    options.MinLevel = LogLevel.Info;
-    options.File.FilePath = "logs/app.log";
+    options.ReadFrom.RegisteredSinks();
+    options.WriteTo.ColoredConsole();
 });
 ```
 
