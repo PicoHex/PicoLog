@@ -2,6 +2,7 @@ namespace PicoLog.Tests;
 
 public sealed class LoggerFactoryTests
 {
+
     [Test]
     public async Task FileSink_DoesNotThrowWhenWritesRaceWithDisposeAsync()
     {
@@ -329,7 +330,7 @@ public sealed class LoggerFactoryTests
                 new("number", 3),
                 new("nullable", null)
             ],
-            Scopes = ["outer", "inner"]
+            Scopes =  ["outer", "inner"]
         };
 
         var rendered = formatter.Format(entry);
@@ -349,10 +350,7 @@ public sealed class LoggerFactoryTests
         var sink = new CollectingSink();
         await using var factory = new LoggerFactory([sink]);
         var logger = factory.CreateLogger("Tests.Category");
-        var properties = new List<KeyValuePair<string, object?>>
-        {
-            new("tenant", "alpha")
-        };
+        var properties = new List<KeyValuePair<string, object?>> { new("tenant", "alpha") };
 
         logger.LogStructured(LogLevel.Info, "snapshot", properties);
         properties[0] = new KeyValuePair<string, object?>("tenant", "mutated");
@@ -805,6 +803,7 @@ public sealed class LoggerFactoryTests
         using var firstWriter = new StringWriter();
         using var secondWriter = new StringWriter();
         await using var factory = new LoggerFactory(
+
             [
                 new ThrowingSink(),
                 new ConsoleSink(new TestFormatter(), firstWriter),
@@ -816,7 +815,9 @@ public sealed class LoggerFactoryTests
         await logger.WarningAsync("payload");
         await factory.DisposeAsync();
 
-        await Assert.That(firstWriter.ToString()).DoesNotContain("Failed to write log entry to sink: payload");
+        await Assert
+            .That(firstWriter.ToString())
+            .DoesNotContain("Failed to write log entry to sink: payload");
         await Assert
             .That(secondWriter.ToString())
             .Contains("Error|Failed to write log entry to sink: payload|Sink failure");
@@ -827,7 +828,9 @@ public sealed class LoggerFactoryTests
     {
         var customSink = new CustomFallbackLookingSink();
         var collectingSink = new CollectingSink();
-        await using var factory = new LoggerFactory([new ThrowingSink(), customSink, collectingSink]);
+        await using var factory = new LoggerFactory(
+            [new ThrowingSink(), customSink, collectingSink]
+        );
         var logger = factory.CreateLogger("Tests.Category");
 
         await logger.WarningAsync("payload");
@@ -1134,7 +1137,8 @@ public sealed class LoggerFactoryTests
 
         listener.SetMeasurementEventCallback<long>(
             (instrument, measurement, _, _) =>
-                measurements.GetOrAdd(instrument.Name, _ => new ConcurrentQueue<double>())
+                measurements
+                    .GetOrAdd(instrument.Name, _ => new ConcurrentQueue<double>())
                     .Enqueue(measurement)
         );
         listener.Start();
@@ -1244,12 +1248,14 @@ public sealed class LoggerFactoryTests
 
         listener.SetMeasurementEventCallback<long>(
             (instrument, measurement, _, _) =>
-                measurements.GetOrAdd(instrument.Name, _ => new ConcurrentQueue<double>())
+                measurements
+                    .GetOrAdd(instrument.Name, _ => new ConcurrentQueue<double>())
                     .Enqueue(measurement)
         );
         listener.SetMeasurementEventCallback<double>(
             (instrument, measurement, _, _) =>
-                measurements.GetOrAdd(instrument.Name, _ => new ConcurrentQueue<double>())
+                measurements
+                    .GetOrAdd(instrument.Name, _ => new ConcurrentQueue<double>())
                     .Enqueue(measurement)
         );
         listener.Start();
@@ -1298,8 +1304,16 @@ public sealed class LoggerFactoryTests
         await AssertMeasurementAtLeastAsync(measurements, PicoLogMetrics.EntriesEnqueuedName, 4);
         await AssertMeasurementAtLeastAsync(measurements, PicoLogMetrics.EntriesDroppedName, 1);
         await AssertMeasurementAtLeastAsync(measurements, PicoLogMetrics.SinkFailuresName, 1);
-        await AssertMeasurementAtLeastAsync(measurements, PicoLogMetrics.ShutdownRejectedWritesName, 1);
-        await AssertMeasurementAtLeastAsync(measurements, PicoLogMetrics.ShutdownDrainDurationName, 0);
+        await AssertMeasurementAtLeastAsync(
+            measurements,
+            PicoLogMetrics.ShutdownRejectedWritesName,
+            1
+        );
+        await AssertMeasurementAtLeastAsync(
+            measurements,
+            PicoLogMetrics.ShutdownDrainDurationName,
+            0
+        );
         await AssertMeasurementContainsAsync(measurements, PicoLogMetrics.QueuedEntriesName, 1);
         await AssertAllMeasurementsAtLeastAsync(measurements, PicoLogMetrics.QueuedEntriesName, 0);
     }
@@ -1517,10 +1531,7 @@ public sealed class LoggerFactoryTests
         {
             listener.RecordObservableInstruments();
 
-            if (
-                measurements.TryGetValue(instrumentName, out var values)
-                && values.Any(predicate)
-            )
+            if (measurements.TryGetValue(instrumentName, out var values) && values.Any(predicate))
                 return;
 
             await Task.Delay(10);
@@ -1622,10 +1633,13 @@ public sealed class LoggerFactoryTests
             if (queue is null)
                 continue;
 
-            var queueRuntimeField = queue.GetType().GetField(
-                "_runtime",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
-            );
+            var queueRuntimeField = queue
+                .GetType()
+                .GetField(
+                    "_runtime",
+                    System.Reflection.BindingFlags.Instance
+                        | System.Reflection.BindingFlags.NonPublic
+                );
             var queueRuntime = queueRuntimeField?.GetValue(queue);
 
             if (ReferenceEquals(queueRuntime, runtime))

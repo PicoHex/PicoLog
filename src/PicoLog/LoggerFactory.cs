@@ -1,6 +1,10 @@
 ﻿namespace PicoLog;
 
-public sealed class LoggerFactory : ILoggerFactory, IFlushableLoggerFactory, IDisposable, IAsyncDisposable
+public sealed class LoggerFactory
+    : ILoggerFactory,
+        IFlushableLoggerFactory,
+        IDisposable,
+        IAsyncDisposable
 {
     private readonly ILogSink[] _sinks;
     private readonly Lock _registrationsLock = new();
@@ -54,7 +58,7 @@ public sealed class LoggerFactory : ILoggerFactory, IFlushableLoggerFactory, IDi
         lock (_registrationsLock)
         {
             ObjectDisposedException.ThrowIf(!_runtime.IsAcceptingWrites, this);
-            registrations = [.. _registrations.Values];
+            registrations =  [.. _registrations.Values];
         }
 
         var pipelineFlushTasks = registrations
@@ -71,7 +75,7 @@ public sealed class LoggerFactory : ILoggerFactory, IFlushableLoggerFactory, IDi
             }
             catch when (whenAll.Exception is not null)
             {
-                (exceptions ??= []).AddRange(whenAll.Exception.Flatten().InnerExceptions);
+                (exceptions ??=  []).AddRange(whenAll.Exception.Flatten().InnerExceptions);
             }
         }
 
@@ -86,7 +90,7 @@ public sealed class LoggerFactory : ILoggerFactory, IFlushableLoggerFactory, IDi
             }
             catch (Exception ex)
             {
-                (exceptions ??= []).Add(ex);
+                (exceptions ??=  []).Add(ex);
             }
         }
 
@@ -105,7 +109,7 @@ public sealed class LoggerFactory : ILoggerFactory, IFlushableLoggerFactory, IDi
             if (!_runtime.TryBeginShutdown())
                 return;
 
-            registrations = [.. _registrations.Values];
+            registrations =  [.. _registrations.Values];
             _registrations.Clear();
         }
 
@@ -117,7 +121,7 @@ public sealed class LoggerFactory : ILoggerFactory, IFlushableLoggerFactory, IDi
             }
             catch (Exception ex)
             {
-                (exceptions ??= []).Add(ex);
+                (exceptions ??=  []).Add(ex);
             }
         }
 
@@ -131,7 +135,7 @@ public sealed class LoggerFactory : ILoggerFactory, IFlushableLoggerFactory, IDi
             }
             catch (Exception ex)
             {
-                (exceptions ??= []).Add(ex);
+                (exceptions ??=  []).Add(ex);
             }
         }
 
