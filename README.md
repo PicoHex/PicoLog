@@ -16,7 +16,7 @@ A lightweight, AOT-friendly logging framework for .NET edge and IoT workloads. T
 - **Structured properties**: optional key/value payloads flow through `LogEntry.Properties` and the built-in formatter output
 - **Built-in metrics**: the core package emits queue, drop, sink-failure, and shutdown metrics through `System.Diagnostics.Metrics`
 - **Minimal surface area**: only a few core abstractions need to be implemented to extend the system
-- **PicoDI integration**: built-in registrations for the logger factory and typed loggers with console logging by default and optional file logging when a file path is configured
+- **PicoDI integration**: built-in registrations for the logger factory and typed loggers, with `WriteTo` sink configuration and optional `ReadFrom.RegisteredSinks()` bridging for PicoDI-registered sinks
 - **Benchmark coverage**: includes a PicoBench-based benchmark project with lightweight and fairer MEL async handoff baselines
 - **Scope support**: nested scopes flow through `AsyncLocal` and are attached to each `LogEntry`
 
@@ -99,10 +99,10 @@ ISvcContainer container = new SvcContainer();
 container.AddLogging(options =>
 {
     options.MinLevel = LogLevel.Info;
-    options.FilePath = "logs/app.log";
-    options.UseColoredConsole = true;
     options.Factory.QueueFullMode = LogQueueFullMode.Wait;
     options.File.BatchSize = 64;
+    options.WriteTo.ColoredConsole();
+    options.WriteTo.File("logs/app.log");
 });
 container.RegisterScoped<IMyService, MyService>();
 
@@ -184,30 +184,31 @@ await using var loggerFactory = new LoggerFactory(sinks, options);
 - a singleton `ILoggerFactory`
 - typed `ILogger<T>` adapters
 - typed `IStructuredLogger<T>` adapters
-- a console sink by default
-- an optional file sink when `FilePath` is configured
+- legacy default sinks when no explicit sink pipeline is configured
+- optional DI-registered sinks when `ReadFrom.RegisteredSinks()` is enabled
 
 During the app lifetime, you can call `ILoggerFactory.FlushAsync()` as a best-effort barrier. It forwards to `IFlushableLoggerFactory` when available and otherwise completes immediately. When shutting down, dispose the resolved factory explicitly so queued log entries are drained before process exit. Writes that arrive after shutdown begins are rejected instead of being accepted late.
 
-You can enable file logging either through the optional `filePath` parameter, by setting `options.FilePath`, or by setting `options.File.FilePath` in the configure overload. An explicit file path is treated as opting into the file sink.
-
-```csharp
-container.AddLogging(LogLevel.Info, "logs/app.log");
-```
+For new code, prefer the `WriteTo` sink builder so built-in and custom sinks share the same configuration path.
 
 ```csharp
 container.AddLogging(options =>
 {
     options.MinLevel = LogLevel.Info;
-    options.FilePath = "logs/app.log";
+    options.WriteTo.ColoredConsole();
+    options.WriteTo.File("logs/app.log");
 });
 ```
 
+You can also bridge sinks already registered in PicoDI by enabling `ReadFrom.RegisteredSinks()`.
+
 ```csharp
+container.Register(new SvcDescriptor(typeof(ILogSink), _ => new AuditSink()));
+
 container.AddLogging(options =>
 {
-    options.MinLevel = LogLevel.Info;
-    options.File.FilePath = "logs/app.log";
+    options.ReadFrom.RegisteredSinks();
+    options.WriteTo.ColoredConsole();
 });
 ```
 
