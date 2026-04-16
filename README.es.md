@@ -96,7 +96,7 @@ using PicoLog.DI;
 
 ISvcContainer container = new SvcContainer();
 
-PicoLog.DI.SvcContainerExtensions.AddLogging(container, options =>
+container.AddLogging(options =>
 {
     options.MinLevel = LogLevel.Info;
     options.FilePath = "logs/app.log";
@@ -192,11 +192,11 @@ Durante la vida de la aplicación, puedes llamar a `ILoggerFactory.FlushAsync()`
 Puedes habilitar logging a archivo mediante el parámetro opcional `filePath`, estableciendo `options.FilePath` o estableciendo `options.File.FilePath` en la sobrecarga de configuración. Una ruta de archivo explícita se trata como una activación explícita del sink de archivo.
 
 ```csharp
-PicoLog.DI.SvcContainerExtensions.AddLogging(container, LogLevel.Info, "logs/app.log");
+container.AddLogging(LogLevel.Info, "logs/app.log");
 ```
 
 ```csharp
-PicoLog.DI.SvcContainerExtensions.AddLogging(container, options =>
+container.AddLogging(options =>
 {
     options.MinLevel = LogLevel.Info;
     options.FilePath = "logs/app.log";
@@ -204,7 +204,7 @@ PicoLog.DI.SvcContainerExtensions.AddLogging(container, options =>
 ```
 
 ```csharp
-PicoLog.DI.SvcContainerExtensions.AddLogging(container, options =>
+container.AddLogging(options =>
 {
     options.MinLevel = LogLevel.Info;
     options.File.FilePath = "logs/app.log";

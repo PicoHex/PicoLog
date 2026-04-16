@@ -96,7 +96,7 @@ using PicoLog.DI;
 
 ISvcContainer container = new SvcContainer();
 
-PicoLog.DI.SvcContainerExtensions.AddLogging(container, options =>
+container.AddLogging(options =>
 {
     options.MinLevel = LogLevel.Info;
     options.FilePath = "logs/app.log";
@@ -192,11 +192,11 @@ Pendant la vie de l’application, vous pouvez appeler `ILoggerFactory.FlushAsyn
 Vous pouvez activer la journalisation fichier soit via le paramètre optionnel `filePath`, soit en définissant `options.FilePath`, soit en définissant `options.File.FilePath` dans la surcharge de configuration. Un chemin de fichier explicite est traité comme un opt-in explicite pour le sink fichier.
 
 ```csharp
-PicoLog.DI.SvcContainerExtensions.AddLogging(container, LogLevel.Info, "logs/app.log");
+container.AddLogging(LogLevel.Info, "logs/app.log");
 ```
 
 ```csharp
-PicoLog.DI.SvcContainerExtensions.AddLogging(container, options =>
+container.AddLogging(options =>
 {
     options.MinLevel = LogLevel.Info;
     options.FilePath = "logs/app.log";
@@ -204,7 +204,7 @@ PicoLog.DI.SvcContainerExtensions.AddLogging(container, options =>
 ```
 
 ```csharp
-PicoLog.DI.SvcContainerExtensions.AddLogging(container, options =>
+container.AddLogging(options =>
 {
     options.MinLevel = LogLevel.Info;
     options.File.FilePath = "logs/app.log";
