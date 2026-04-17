@@ -1,4 +1,4 @@
-﻿namespace PicoLog.Abs;
+namespace PicoLog;
 
 public interface ILogFormatter
 {
