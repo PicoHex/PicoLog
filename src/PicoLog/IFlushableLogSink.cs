@@ -1,4 +1,4 @@
-namespace PicoLog.Abs;
+namespace PicoLog;
 
 /// <summary>
 /// Optional companion contract for <see cref="ILogSink"/> implementations that can flush buffered
