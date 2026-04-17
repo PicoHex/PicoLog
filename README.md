@@ -91,12 +91,13 @@ await loggerFactory.FlushAsync(); // barrier for entries accepted so far, not sh
 ```csharp
 using PicoDI;
 using PicoDI.Abs;
+using PicoLog;
 using PicoLog.Abs;
 using PicoLog.DI;
 
 ISvcContainer container = new SvcContainer();
 
-container.AddLogging(options =>
+container.AddPicoLog(options =>
 {
     options.MinLevel = LogLevel.Info;
     options.Factory.QueueFullMode = LogQueueFullMode.Wait;
@@ -109,20 +110,23 @@ container.RegisterScoped<IMyService, MyService>();
 await using var scope = container.CreateScope();
 
 var service = scope.GetService<IMyService>();
-var structuredLogger = scope.GetService<IStructuredLogger<MyService>>();
+var logger = scope.GetService<ILogger<MyService>>();
+var logControl = scope.GetService<IPicoLogControl>();
 await service.DoWorkAsync();
 
-structuredLogger.LogStructured(
+logger.LogStructured(
     LogLevel.Info,
     "DI structured event",
     [new("tenant", "alpha"), new("attempt", 3)]
 );
 
-await scope.GetService<ILoggerFactory>().FlushAsync();
-await scope.GetService<ILoggerFactory>().DisposeAsync();
+await logControl.FlushAsync();
+await logControl.DisposeAsync();
 ```
 
-The `ILoggerFactory` extension `FlushAsync()` is best-effort. It forwards to `IFlushableLoggerFactory` when supported and otherwise completes immediately.
+`AddPicoLog()` is the focused DI-first entry point. It keeps the default container surface small: `ILogger<T>` for writes and `IPicoLogControl` for explicit flush/shutdown.
+
+`PicoLog.Abs` is the consumer-facing contract package. `PicoLog` owns runtime/extensibility contracts such as sinks, formatters, flush companions, and `LogEntry`, so application code can stay focused on `ILogger<T>` and `IPicoLogControl` while extension authors target the main runtime package directly.
 
 ## Configuration
 
@@ -179,20 +183,20 @@ await using var loggerFactory = new LoggerFactory(sinks, options);
 
 ### PicoDI Defaults
 
-`AddLogging()` registers:
+`AddPicoLog()` registers:
 
 - a singleton `ILoggerFactory`
+- a singleton `IPicoLogControl`
 - typed `ILogger<T>` adapters
-- typed `IStructuredLogger<T>` adapters
 - legacy default sinks when no explicit sink pipeline is configured
 - optional DI-registered sinks when `ReadFrom.RegisteredSinks()` is enabled
 
-During the app lifetime, you can call `ILoggerFactory.FlushAsync()` as a best-effort barrier. It forwards to `IFlushableLoggerFactory` when available and otherwise completes immediately. When shutting down, dispose the resolved factory explicitly so queued log entries are drained before process exit. Writes that arrive after shutdown begins are rejected instead of being accepted late.
+During the app lifetime, call `IPicoLogControl.FlushAsync()` when you need an explicit barrier for already accepted entries. When shutting down, dispose the resolved control so queued log entries are drained before process exit. Writes that arrive after shutdown begins are rejected instead of being accepted late.
 
 For new code, prefer the `WriteTo` sink builder so built-in and custom sinks share the same configuration path.
 
 ```csharp
-container.AddLogging(options =>
+container.AddPicoLog(options =>
 {
     options.MinLevel = LogLevel.Info;
     options.WriteTo.ColoredConsole();
@@ -205,7 +209,7 @@ You can also bridge sinks already registered in PicoDI by enabling `ReadFrom.Reg
 ```csharp
 container.Register(new SvcDescriptor(typeof(ILogSink), _ => new AuditSink()));
 
-container.AddLogging(options =>
+container.AddPicoLog(options =>
 {
     options.ReadFrom.RegisteredSinks();
     options.WriteTo.ColoredConsole();
