@@ -2,6 +2,7 @@
 
 public sealed class LoggerFactory
     : ILoggerFactory,
+        IPicoLogControl,
         IFlushableLoggerFactory,
         IDisposable,
         IAsyncDisposable
