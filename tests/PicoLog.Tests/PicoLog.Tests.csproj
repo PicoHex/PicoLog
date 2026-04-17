@@ -16,6 +16,7 @@
     </ItemGroup>
 
     <ItemGroup>
+      <ProjectReference Include="..\..\src\PicoLog.Abs\PicoLog.Abs.csproj" />
       <ProjectReference Include="..\..\src\PicoLog\PicoLog.csproj" />
       <ProjectReference Include="..\..\src\PicoLog.DI\PicoLog.DI.csproj" />
     </ItemGroup>
