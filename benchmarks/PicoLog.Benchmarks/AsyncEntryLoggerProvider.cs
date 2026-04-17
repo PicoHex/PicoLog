@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using PicoLog;
 using PicoLog.Abs;
 
 namespace PicoLog.Benchmarks;
