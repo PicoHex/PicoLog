@@ -85,7 +85,7 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            var result = container.AddLogging(LogLevel.Info, filePath);
+            var result = container.AddPicoLog(LogLevel.Info, filePath);
 
             await Assert.That(result).IsSameReferenceAs(container);
         }
@@ -105,7 +105,7 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            container.AddLogging(LogLevel.Info, " ");
+            container.AddPicoLog(LogLevel.Info, " ");
         }
         catch (ArgumentException ex)
         {
@@ -124,7 +124,7 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            container.AddLogging(options =>
+            container.AddPicoLog(options =>
             {
                 options.MinLevel = LogLevel.Warning;
                 options.UseColoredConsole = false;
@@ -160,7 +160,7 @@ public sealed class SvcContainerExtensionsTests
     {
         ISvcContainer container = new SvcContainer();
 
-        container.AddLogging(options =>
+        container.AddPicoLog(options =>
         {
             options.MinLevel = LogLevel.Info;
             options.UseColoredConsole = false;
@@ -185,7 +185,7 @@ public sealed class SvcContainerExtensionsTests
     {
         ISvcContainer container = new SvcContainer();
 
-        container.AddLogging(options =>
+        container.AddPicoLog(options =>
         {
             options.MinLevel = LogLevel.Info;
         });
@@ -212,7 +212,7 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            container.AddLogging(options =>
+            container.AddPicoLog(options =>
             {
                 options.UseColoredConsole = false;
                 options.Factory.MinLevel = LogLevel.Error;
@@ -248,7 +248,7 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            container.AddLogging(options =>
+            container.AddPicoLog(options =>
             {
                 options.EnableFileSink = true;
             });
@@ -270,7 +270,7 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            container.AddLogging(options =>
+            container.AddPicoLog(options =>
             {
                 options.MinLevel = LogLevel.Info;
                 options.UseColoredConsole = false;
@@ -296,14 +296,14 @@ public sealed class SvcContainerExtensionsTests
     }
 
     [Test]
-    public async Task AddLogging_ResolvesStructuredLogger_And_PreservesProperties()
+    public async Task AddPicoLog_ResolvesTypedLogger_And_PreservesPropertiesThroughExtensions()
     {
         ISvcContainer container = new SvcContainer();
         var filePath = Path.Combine(Path.GetTempPath(), $"pico-logger-structured-{Guid.NewGuid():N}.log");
 
         try
         {
-            container.AddLogging(options =>
+            container.AddPicoLog(options =>
             {
                 options.MinLevel = LogLevel.Info;
                 options.UseColoredConsole = false;
@@ -311,15 +311,15 @@ public sealed class SvcContainerExtensionsTests
             });
 
             await using var scope = container.CreateScope();
-            var structuredLogger = scope.GetService<IStructuredLogger<LoggerConsumer>>();
-            var factory = scope.GetService<ILoggerFactory>();
+            var logger = scope.GetService<ILogger<LoggerConsumer>>();
+            var control = scope.GetService<IPicoLogControl>();
 
-            structuredLogger.LogStructured(
+            logger.LogStructured(
                 LogLevel.Warning,
                 "structured-di-message",
                 [new("tenant", "alpha"), new("attempt", 3)]
             );
-            await factory.DisposeAsync();
+            await control.DisposeAsync();
 
             var contents = await File.ReadAllTextAsync(filePath);
             await Assert.That(contents).Contains(typeof(LoggerConsumer).FullName!);
@@ -334,11 +334,11 @@ public sealed class SvcContainerExtensionsTests
     }
 
     [Test]
-    public async Task AddLogging_ResolvesFlushableLoggerFactory_AsSameInstanceAsILoggerFactory()
+    public async Task AddPicoLog_ResolvesPicoLogControl_AsSameInstanceAsILoggerFactory()
     {
         ISvcContainer container = new SvcContainer();
 
-        container.AddLogging(options =>
+        container.AddPicoLog(options =>
         {
             options.MinLevel = LogLevel.Info;
             options.UseColoredConsole = false;
@@ -346,11 +346,35 @@ public sealed class SvcContainerExtensionsTests
 
         await using var scope = container.CreateScope();
         var loggerFactory = scope.GetService<ILoggerFactory>();
-        var flushableFactory = scope.GetService<IFlushableLoggerFactory>();
+        var logControl = scope.GetService<IPicoLogControl>();
 
         await Assert.That(loggerFactory).IsNotNull();
-        await Assert.That(flushableFactory).IsNotNull();
+        await Assert.That(logControl).IsNotNull();
+        await Assert.That(logControl).IsSameReferenceAs(loggerFactory);
+
+        await logControl.DisposeAsync();
+    }
+
+    [Test]
+    public async Task AddLogging_LegacyEntryPoint_StillRegistersLegacyContracts()
+    {
+        ISvcContainer container = new SvcContainer();
+
+#pragma warning disable CS0618
+        container.AddLogging(options =>
+        {
+            options.MinLevel = LogLevel.Info;
+            options.UseColoredConsole = false;
+        });
+#pragma warning restore CS0618
+
+        await using var scope = container.CreateScope();
+        var loggerFactory = scope.GetService<ILoggerFactory>();
+        var flushableFactory = scope.GetService<IFlushableLoggerFactory>();
+        var structuredLogger = scope.GetService<IStructuredLogger<LoggerConsumer>>();
+
         await Assert.That(flushableFactory).IsSameReferenceAs(loggerFactory);
+        await Assert.That(structuredLogger).IsNotNull();
 
         await loggerFactory.DisposeAsync();
     }
@@ -363,7 +387,7 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            container.AddLogging(options =>
+            container.AddPicoLog(options =>
             {
                 options.MinLevel = LogLevel.Info;
                 options.UseColoredConsole = false;
@@ -397,7 +421,7 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            container.AddLogging(options =>
+            container.AddPicoLog(options =>
             {
                 options.Formatter = null!;
             });
@@ -419,7 +443,7 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            container.AddLogging(options =>
+            container.AddPicoLog(options =>
             {
                 options.MinLevel = LogLevel.Info;
                 options.UseColoredConsole = false;
@@ -451,7 +475,7 @@ public sealed class SvcContainerExtensionsTests
         ISvcContainer container = new SvcContainer();
         var sink = new RecordingSink();
 
-        container.AddLogging(options =>
+        container.AddPicoLog(options =>
         {
             options.WriteTo.Sink(sink);
         });
@@ -475,7 +499,7 @@ public sealed class SvcContainerExtensionsTests
         var createCount = 0;
         RecordingSink? createdSink = null;
 
-        container.AddLogging(options =>
+        container.AddPicoLog(options =>
         {
             options.WriteTo.Sink(() =>
             {
@@ -489,9 +513,9 @@ public sealed class SvcContainerExtensionsTests
 
         await using var scope = container.CreateScope();
         var loggerFactory = scope.GetService<ILoggerFactory>();
-        var flushableFactory = scope.GetService<IFlushableLoggerFactory>();
+        var logControl = scope.GetService<IPicoLogControl>();
 
-        await Assert.That(flushableFactory).IsSameReferenceAs(loggerFactory);
+        await Assert.That(logControl).IsSameReferenceAs(loggerFactory);
         await Assert.That(createCount).IsEqualTo(1);
 
         var logger = loggerFactory.CreateLogger("Tests.Category");
@@ -510,7 +534,7 @@ public sealed class SvcContainerExtensionsTests
         ISvcContainer container = new SvcContainer();
         var sink = new RecordingSink();
 
-        container.AddLogging(options =>
+        container.AddPicoLog(options =>
         {
             options.UseColoredConsole = true;
             options.FilePath = Path.Combine(Path.GetTempPath(), $"pico-logger-di-{Guid.NewGuid():N}.log");
@@ -539,7 +563,7 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            container.AddLogging(options =>
+            container.AddPicoLog(options =>
             {
                 options.Formatter = new PrefixFormatter("write-to");
                 options.FilePath = filePath;
@@ -573,7 +597,7 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            container.AddLogging(options =>
+            container.AddPicoLog(options =>
             {
                 options.Formatter = new PrefixFormatter("write-to-explicit-path");
                 options.WriteTo.File(filePath);
@@ -606,7 +630,7 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            container.AddLogging(options =>
+            container.AddPicoLog(options =>
             {
                 options.Formatter = new PrefixFormatter("write-to-configure");
                 options.File.BatchSize = 8;
@@ -648,7 +672,7 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            container.AddLogging(options =>
+            container.AddPicoLog(options =>
             {
                 options.Formatter = new PrefixFormatter("stable-snapshot");
                 options.WriteTo.File(file =>
@@ -695,7 +719,7 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            container.AddLogging(options =>
+            container.AddPicoLog(options =>
             {
                 options.WriteTo.File();
             });
@@ -715,22 +739,23 @@ public sealed class SvcContainerExtensionsTests
         ISvcContainer container = new SvcContainer();
         var sink = new RecordingFlushableSink();
 
-        container.AddLogging(options =>
+        container.AddPicoLog(options =>
         {
             options.WriteTo.Sink(sink);
         });
 
         await using var scope = container.CreateScope();
         var factory = scope.GetService<ILoggerFactory>();
+        var control = scope.GetService<IPicoLogControl>();
         var logger = factory.CreateLogger("Tests.Category");
 
         await logger.InfoAsync("flushable-custom-sink");
-        await factory.FlushAsync();
+        await control.FlushAsync();
 
         await Assert.That(sink.FlushCallCount).IsEqualTo(1);
         await Assert.That(sink.DisposeCallCount).IsEqualTo(0);
 
-        await factory.DisposeAsync();
+        await control.DisposeAsync();
         await Assert.That(sink.DisposeCallCount).IsEqualTo(1);
     }
 
@@ -739,7 +764,7 @@ public sealed class SvcContainerExtensionsTests
     {
         ISvcContainer container = new SvcContainer();
 
-        container.AddLogging(options =>
+        container.AddPicoLog(options =>
         {
             options.WriteTo.Console();
             options.WriteTo.ColoredConsole();
@@ -769,7 +794,7 @@ public sealed class SvcContainerExtensionsTests
         container.Register(new SvcDescriptor(typeof(ILogSink), _ => new OrderingSink("first", writes)));
         container.Register(new SvcDescriptor(typeof(ILogSink), _ => new OrderingSink("second", writes)));
 
-        container.AddLogging(options =>
+        container.AddPicoLog(options =>
         {
             options.ReadFrom.RegisteredSinks();
         });
@@ -792,7 +817,7 @@ public sealed class SvcContainerExtensionsTests
 
         container.Register(new SvcDescriptor(typeof(ILogSink), _ => sink));
 
-        container.AddLogging(options =>
+        container.AddPicoLog(options =>
         {
             options.ReadFrom.RegisteredSinks();
         });
@@ -812,22 +837,23 @@ public sealed class SvcContainerExtensionsTests
 
         container.Register(new SvcDescriptor(typeof(ILogSink), _ => sink));
 
-        container.AddLogging(options =>
+        container.AddPicoLog(options =>
         {
             options.ReadFrom.RegisteredSinks();
         });
 
         await using var scope = container.CreateScope();
         var factory = scope.GetService<ILoggerFactory>();
+        var control = scope.GetService<IPicoLogControl>();
         var logger = factory.CreateLogger("Tests.Category");
 
         await logger.InfoAsync("flush-registered-sink");
-        await factory.FlushAsync();
+        await control.FlushAsync();
 
         await Assert.That(sink.FlushCallCount).IsEqualTo(1);
         await Assert.That(sink.DisposeCallCount).IsEqualTo(0);
 
-        await factory.DisposeAsync();
+        await control.DisposeAsync();
         await Assert.That(sink.DisposeCallCount).IsEqualTo(0);
     }
 
@@ -839,7 +865,7 @@ public sealed class SvcContainerExtensionsTests
 
         container.Register(new SvcDescriptor(typeof(ILogSink), _ => new OrderingSink("registered", writes)));
 
-        container.AddLogging(options =>
+        container.AddPicoLog(options =>
         {
             options.ReadFrom.RegisteredSinks();
             options.WriteTo.Sink(new OrderingSink("explicit", writes));
@@ -864,7 +890,7 @@ public sealed class SvcContainerExtensionsTests
 
         try
         {
-            container.AddLogging(options =>
+            container.AddPicoLog(options =>
             {
                 options.ReadFrom.RegisteredSinks();
             });
@@ -894,7 +920,7 @@ public sealed class SvcContainerExtensionsTests
             )
         );
 
-        container.AddLogging(options =>
+        container.AddPicoLog(options =>
         {
             options.ReadFrom.RegisteredSinks();
             options.WriteTo.Sink(fallbackSink);
@@ -925,7 +951,7 @@ public sealed class SvcContainerExtensionsTests
 
         container.Register(new SvcDescriptor(typeof(ILogSink), _ => sink));
 
-        container.AddLogging(options =>
+        container.AddPicoLog(options =>
         {
             options.UseColoredConsole = true;
             options.ReadFrom.RegisteredSinks();
