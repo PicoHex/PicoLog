@@ -1,4 +1,5 @@
 using PicoBench;
+using PicoLog;
 using PicoLog.Abs;
 using PicoLogLevel = PicoLog.Abs.LogLevel;
 
