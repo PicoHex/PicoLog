@@ -6,38 +6,47 @@
 [![NuGet](https://img.shields.io/nuget/v/PicoLog.svg)](https://www.nuget.org/packages/PicoLog)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-一个轻量、适合 AOT 的 .NET 日志框架，面向边缘与 IoT 工作负载。该仓库包含契约、核心日志实现、PicoDI 集成、示例应用以及专用基准测试项目。
+PicoLog 是一个轻量、适合 AOT 的 .NET 日志框架，面向边缘、桌面、工具型与 IoT 工作负载。
+
+当前设计有意保持精简：
+
+- **一个 logger 模型**：`ILogger` / `ILogger<T>`
+- **一个 DI 入口**：`AddPicoLog(...)`
+- **一个生命周期拥有者**：`ILoggerFactory`
+
+结构化属性是 log event 本身的一部分，而不是另一种 logger 类型。`PicoLog` 中承载运行时与扩展类型，例如 sink、formatter、`LogEntry` 与 flush 伴随契约；`PicoLog.Abs` 只保留面向使用者的契约。
 
 ## 功能特性
 
-- **AOT 兼容性**: 面向 `net10.0`，避免依赖大量反射的基础设施
-- **有界异步管线**: logger 会将条目加入有界通道，并由后台任务写入 sink
-- **显式刷新接口**: `IFlushableLoggerFactory`、`IFlushableLogSink` 和尽力而为的 `FlushAsync()` 扩展，让运行中的刷新屏障更明确，而不会与关闭过程混淆
-- **结构化属性**: 可选的键值负载会通过 `LogEntry.Properties` 以及内置格式化器输出流转
-- **内置指标**: 核心包会通过 `System.Diagnostics.Metrics` 发出队列、丢弃、sink 失败和关闭相关指标
-- **精简的表面积**: 只需实现少量核心抽象即可扩展整个系统
-- **PicoDI 集成**: 内置注册 logger factory 和类型化 logger，并支持通过 `WriteTo` 配置 sink，以及通过 `ReadFrom.RegisteredSinks()` 可选桥接 PicoDI 中已注册的 sink
-- **基准测试覆盖**: 包含基于 PicoBench 的基准项目，提供轻量和更公平的 MEL 异步交接基线
-- **作用域支持**: 嵌套作用域通过 `AsyncLocal` 流转，并附加到每个 `LogEntry`
+- **AOT 友好设计**：避免依赖大量反射的基础设施，并提供 Native AOT 示例
+- **有界异步管线**：logger 会把条目交给按类别划分的有界通道管线，由后台任务继续处理
+- **显式生命周期语义**：`FlushAsync()` 是运行中的屏障，`DisposeAsync()` 是关闭时的最终排空
+- **`ILogger` 原生结构化属性**：原生重载会把键值属性保留到 `LogEntry.Properties`
+- **精简 DI 表面积**：`AddPicoLog(...)` 只注册 `ILoggerFactory` 与类型化 `ILogger<T>`
+- **内置 sink 与 formatter**：控制台、彩色控制台、文件，以及可读的文本 formatter
+- **flush 伴随契约**：运行时仍通过 `IFlushableLoggerFactory` 与 `IFlushableLogSink` 暴露严格的 flush 能力
+- **内置指标**：通过 `System.Diagnostics.Metrics` 发出队列、丢弃、sink 失败和关闭相关指标
+- **基准项目**：基于 PicoBench，对 PicoLog 与 MEL 的交接成本进行对比
+- **作用域支持**：嵌套 scope 通过 `AsyncLocal` 流动，并附加到每个 `LogEntry`
 
 ## 项目结构
 
 ```text
 PicoLog/
 ├── src/
-│   ├── PicoLog.Abs/       # Abstract interfaces and contracts
-│   ├── PicoLog/           # Core logging implementation
-│   └── PicoLog.DI/        # Dependency injection integration
+│   ├── PicoLog.Abs/        # Consumer-facing contracts (ILogger, ILogger<T>, ILoggerFactory, LogLevel)
+│   ├── PicoLog/            # Runtime implementation and extensibility contracts
+│   └── PicoLog.DI/         # PicoDI integration via AddPicoLog(...)
 ├── benchmarks/
-│   └── PicoLog.Benchmarks/# PicoBench-based benchmark project
+│   └── PicoLog.Benchmarks/ # PicoBench-based benchmark project
 ├── samples/
-│   └── PicoLog.Sample/    # Example usage
-└── tests/                # Test projects
+│   └── PicoLog.Sample/     # End-to-end sample app
+└── tests/                  # Test projects
 ```
 
 ## 安装
 
-### 核心日志库
+### 核心运行时
 
 ```bash
 dotnet add package PicoLog
@@ -60,6 +69,7 @@ using PicoLog.Abs;
 var formatter = new ConsoleFormatter();
 using var consoleSink = new ConsoleSink(formatter);
 await using var fileSink = new FileSink(formatter, "logs/app.log");
+
 await using var loggerFactory = new LoggerFactory([consoleSink, fileSink])
 {
     MinLevel = LogLevel.Info
@@ -68,35 +78,41 @@ await using var loggerFactory = new LoggerFactory([consoleSink, fileSink])
 var logger = new Logger<MyService>(loggerFactory);
 
 logger.Info("Application starting");
-logger.Warning("This is a warning");
-await logger.ErrorAsync("Error occurred", new InvalidOperationException("Something went wrong"));
-logger.LogStructured(
+logger.Warning("Configuration file is missing an optional section");
+
+logger.Log(
     LogLevel.Info,
     "Request completed",
-    new KeyValuePair<string, object?>[]
-    {
+    [
         new("requestId", "req-42"),
         new("statusCode", 200),
         new("elapsedMs", 18.7)
-    }
+    ],
+    exception: null
 );
 
-await loggerFactory.FlushAsync(); // 当前已接受条目的屏障，不等同于关闭
+await logger.ErrorAsync(
+    "Error occurred",
+    new InvalidOperationException("Something went wrong")
+);
+
+await loggerFactory.FlushAsync();
 ```
 
-`FlushAsync()` 在 factory 上不是释放操作。它会等待刷新快照之前已被接受的条目穿过 factory 管线，而 `DisposeAsync()` 仍然是用于最终排空和释放资源的关闭路径。
+`FlushAsync()` **不是**释放操作。它是针对 flush 快照之前已接受条目的屏障。最终关闭排空和 sink 清理由 `DisposeAsync()` 负责。
 
 ### DI 集成
 
 ```csharp
 using PicoDI;
 using PicoDI.Abs;
+using PicoLog;
 using PicoLog.Abs;
 using PicoLog.DI;
 
 ISvcContainer container = new SvcContainer();
 
-container.AddLogging(options =>
+container.AddPicoLog(options =>
 {
     options.MinLevel = LogLevel.Info;
     options.Factory.QueueFullMode = LogQueueFullMode.Wait;
@@ -104,31 +120,54 @@ container.AddLogging(options =>
     options.WriteTo.ColoredConsole();
     options.WriteTo.File("logs/app.log");
 });
+
 container.RegisterScoped<IMyService, MyService>();
 
 await using var scope = container.CreateScope();
 
 var service = scope.GetService<IMyService>();
-var structuredLogger = scope.GetService<IStructuredLogger<MyService>>();
+var logger = scope.GetService<ILogger<MyService>>();
+var loggerFactory = scope.GetService<ILoggerFactory>();
+
 await service.DoWorkAsync();
 
-structuredLogger.LogStructured(
+logger.Log(
     LogLevel.Info,
     "DI structured event",
-    [new("tenant", "alpha"), new("attempt", 3)]
+    [new("tenant", "alpha"), new("attempt", 3)],
+    exception: null
 );
 
-await scope.GetService<ILoggerFactory>().FlushAsync();
-await scope.GetService<ILoggerFactory>().DisposeAsync();
+await loggerFactory.FlushAsync();
+await loggerFactory.DisposeAsync();
 ```
 
-`ILoggerFactory` 上的 `FlushAsync()` 扩展是尽力而为的。支持 `IFlushableLoggerFactory` 时会转发，不支持时会立即完成。
+`AddPicoLog()` 是唯一的 DI 入口。业务代码通常只依赖 `ILogger<T>`。`ILoggerFactory` 则是 app root 上显式的 flush / shutdown 生命周期拥有者。
+
+## 核心模型
+
+### 一个 Logger 模型
+
+PicoLog 不再把日志划分为“普通 logger”和“结构化 logger”两套接口。
+
+- `ILogger` / `ILogger<T>` 是主要写入接口
+- 普通事件使用 `Log(level, message, exception?)`
+- 结构化事件使用 `Log(level, message, properties, exception)`
+- 异步版本通过 `LogAsync(...)` 保持同样形状
+
+`LogStructured()` 与 `LogStructuredAsync()` 仍然存在于 `LoggerExtensions` 中，但它们只是对原生 `ILogger` 重载的语法糖。
+
+### 包分层
+
+- **`PicoLog.Abs`**：面向使用者的契约，例如 `ILogger`、`ILogger<T>`、`ILoggerFactory`、`LogLevel` 与 `LoggerExtensions`
+- **`PicoLog`**：运行时与扩展类型，例如 `LoggerFactory`、`Logger<T>`、`LogEntry`、`ILogSink`、`ILogFormatter`、`IFlushableLoggerFactory` 与 `IFlushableLogSink`
+- **`PicoLog.DI`**：通过 `AddPicoLog(...)` 提供 PicoDI 集成
 
 ## 配置
 
 ### 最低级别
 
-`LoggerFactory.MinLevel` 控制哪些条目会被接受。数值越小表示级别越严重，因此默认的 `Debug` 级别会允许 `Emergency` 到 `Debug`，但会过滤掉 `Trace`。
+`LoggerFactory.MinLevel` 控制哪些条目会被接受。数值越小表示级别越严重，因此默认的 `Debug` 级别允许 `Emergency` 到 `Debug`，但会过滤 `Trace`。
 
 ```csharp
 await using var loggerFactory = new LoggerFactory(sinks)
@@ -139,26 +178,42 @@ await using var loggerFactory = new LoggerFactory(sinks)
 
 ### 生命周期所有权
 
-`LoggerFactory` 拥有按类别缓存的 logger、它们各自的按类别管线、这些管线运行的后台排空任务，以及已注册的 sink。`FlushAsync()` 是运行中的屏障，不是释放。它会等待刷新快照之前已接受的条目穿过 factory 管线。关闭时请使用 `DisposeAsync()` 完成最终排空并释放 sink 资源。一旦开始释放，新的写入会被拒绝，而已经入队的条目会继续排空。
+`LoggerFactory` 拥有：
+
+- 按类别缓存的 logger
+- 每个类别的处理管线
+- 后台排空任务
+- 已注册的 sink
+
+这意味着生命周期 API 应该属于 factory，而不是 `ILogger<T>`。
 
 ```csharp
 await using var loggerFactory = new LoggerFactory(sinks);
 
 var logger = new Logger<MyService>(loggerFactory);
 logger.Info("Starting up");
-await loggerFactory.FlushAsync();
 
-// FlushAsync 是当前已接受条目的屏障。
-// DisposeAsync 负责最终排空，并拒绝与关闭并发的写入。
+await loggerFactory.FlushAsync();   // 运行中的 barrier
+await loggerFactory.DisposeAsync(); // 最终 shutdown drain
 ```
+
+如果你从 DI 中解析 `ILoggerFactory`，请记住它依然是应用级 singleton 生命周期拥有者。**从 scope 中解析它，并不意味着它归这个 scope 所有。**
 
 ### 队列压力
 
-`LoggerFactoryOptions.QueueFullMode` 明确规定了同步和异步写入在队列承压时的处理方式。`LogAsync()` 和 `LogStructuredAsync()` 完成时，表示 logger 边界的交接处理已经结束：条目可能已被接受、因队列策略被丢弃，或在关闭期间被拒绝，而 `Wait` 模式下的背压处理也在该边界完成，并不表示 sink 已经持久化完成:
+`LoggerFactoryOptions.QueueFullMode` 明确规定了同步和异步写入在队列承压时的行为。
 
-- `DropOldest` 会丢弃队列中最旧的条目，以保持日志写入非阻塞。这是默认值。
-- `DropWrite` 会拒绝新条目，并通过 `OnMessagesDropped` 报告丢弃情况。
-- `Wait` 会让同步日志最多阻塞到 `SyncWriteTimeout`，并让异步日志等待队列空间，直到请求取消。
+`LogAsync()` 完成时，表示 logger 边界的交接处理已经完成。该条目可能：
+
+- 已被接受
+- 因队列策略被丢弃
+- 在关闭期间被拒绝
+
+它**不表示**某个 sink 已经完成持久化写入。
+
+- `DropOldest` 会丢弃最旧的排队项，从而保持非阻塞。这是默认值。
+- `DropWrite` 会拒绝新条目，并通过 `OnMessagesDropped` 报告。
+- `Wait` 会让同步写入最多阻塞到 `SyncWriteTimeout`，并让异步写入等待队列空间直到请求取消。
 
 ```csharp
 var options = new LoggerFactoryOptions
@@ -171,50 +226,19 @@ var options = new LoggerFactoryOptions
 await using var loggerFactory = new LoggerFactory(sinks, options);
 ```
 
-### 内置 Sink
+## 内置运行时组件
 
-- `ConsoleSink` 会将纯文本格式化后的条目写到标准输出。
+### Sink
+
+- `ConsoleSink` 会将格式化后的纯文本条目写到标准输出。
 - `ColoredConsoleSink` 会串行化颜色切换，避免控制台状态在并发写入之间泄漏。
-- `FileSink` 会先在后台队列中批量处理 UTF-8 文件写入，再刷新到磁盘，并通过 `IFlushableLogSink` 支持 sink 级别的刷新。`AddLogging()` 会在 logger factory 内部创建已配置的 sink，因此 factory 仍然是其生命周期的唯一所有者。
+- `FileSink` 会先在后台队列中批量处理 UTF-8 文件写入，再刷新到磁盘，并通过 `IFlushableLogSink` 支持 sink 级别 flush。
 
-### PicoDI 默认注册
+使用 `AddPicoLog()` 时，配置好的 sink 会在 logger factory 内部创建，因此 factory 仍是其唯一生命周期拥有者。
 
-`AddLogging()` 会注册:
+### Formatter
 
-- 单例 `ILoggerFactory`
-- 类型化 `ILogger<T>` 适配器
-- 类型化 `IStructuredLogger<T>` 适配器
-- 在未显式配置 sink 管道时保留 legacy 默认 sinks
-- 在启用 `ReadFrom.RegisteredSinks()` 时附加 PicoDI 中已注册的 sinks
-
-在应用运行期间，你可以把 `ILoggerFactory.FlushAsync()` 当作尽力而为的屏障来调用。可用时它会转发到 `IFlushableLoggerFactory`，否则会立即完成。关闭时，请显式释放已解析的 factory，这样进程退出前会排空排队中的日志条目。关闭开始后到达的写入会被拒绝，而不是在过晚时仍被接受。
-
-对于新代码，优先使用 `WriteTo` sink builder，让内置 sink 和自定义 sink 共享同一条配置路径。
-
-```csharp
-container.AddLogging(options =>
-{
-    options.MinLevel = LogLevel.Info;
-    options.WriteTo.ColoredConsole();
-    options.WriteTo.File("logs/app.log");
-});
-```
-
-如果你已经把 sink 注册到了 PicoDI，也可以通过 `ReadFrom.RegisteredSinks()` 把它们桥接进日志管道。
-
-```csharp
-container.Register(new SvcDescriptor(typeof(ILogSink), _ => new AuditSink()));
-
-container.AddLogging(options =>
-{
-    options.ReadFrom.RegisteredSinks();
-    options.WriteTo.ColoredConsole();
-});
-```
-
-### 内置格式化器
-
-`ConsoleFormatter` 会生成便于阅读的文本行，其中包含时间戳、级别、类别、消息、可选的结构化属性、异常文本以及可选作用域。
+`ConsoleFormatter` 会生成易读文本行，其中包含时间戳、级别、类别、消息、可选结构化属性、异常文本和可选作用域。
 
 ```csharp
 var formatter = new ConsoleFormatter();
@@ -223,10 +247,10 @@ var sink = new ConsoleSink(formatter);
 
 ### 结构化日志
 
-PicoLog 保持与 `ILogger` 兼容，并通过 `IStructuredLogger` / `IStructuredLogger<T>` 提供有保证的结构化日志能力。当你使用内置 `LoggerFactory` 时，运行时 logger 会把 `LogStructured()` / `LogStructuredAsync()` 的负载保留在 `LogEntry.Properties` 上。
+结构化数据是 log event 本身的一部分。
 
 ```csharp
-logger.LogStructured(
+logger.Log(
     LogLevel.Warning,
     "Cache miss",
     new KeyValuePair<string, object?>[]
@@ -234,43 +258,65 @@ logger.LogStructured(
         new("cacheKey", "user:42"),
         new("node", "edge-a"),
         new("attempt", 3)
-    }
+    },
+    exception: null
 );
 ```
 
-`ConsoleFormatter` 会在消息后以紧凑的文本形式附加结构化属性，例如:
+这些属性会被保留在 `LogEntry.Properties` 上，再由 sink 或 formatter 决定如何消费。
+
+例如，`ConsoleFormatter` 会把它们追加成紧凑文本形式：
 
 ```text
 [2026-04-05 11:30:42.123] WARNING   [MyService] Cache miss {cacheKey="user:42", node="edge-a", attempt=3}
 ```
 
-### 日志扩展
+## 日志扩展
 
-随附的扩展方法定义在 `ILogger` 和 `ILogger<T>` 上:
+内置扩展方法定义在 `ILogger` 与 `ILogger<T>` 上：
 
 - `Trace`, `Debug`, `Info`, `Notice`, `Warning`, `Error`, `Critical`, `Alert`, `Emergency`
-- 异步对应方法，例如 `InfoAsync` 和 `ErrorAsync`
-- `LogStructured` 和 `LogStructuredAsync` 作为尽力而为的适配器，当运行时 logger 实现了 `IStructuredLogger` 时会保留属性，否则会回退为不带结构化负载的普通日志
-- `ILoggerFactory` 和 `ILogSink` 上尽力而为的 `FlushAsync()` 扩展，在运行时类型支持刷新时会转发，否则会立即完成
+- 异步对应方法，例如 `InfoAsync` 与 `ErrorAsync`
+- `LogStructured` 与 `LogStructuredAsync`，作为对原生 property-aware `ILogger` 重载的便捷包装
+- `ILoggerFactory` 与 `ILogSink` 上尽力而为的 `FlushAsync()` 扩展
 
-如果你需要严格的结构化日志契约，请直接依赖 `IStructuredLogger` / `IStructuredLogger<T>`。如果你需要严格的刷新契约，请直接依赖 `IFlushableLoggerFactory` 或 `IFlushableLogSink`。
+`ILoggerFactory.FlushAsync()` 扩展位于 `PicoLog` 包中，而不是 `PicoLog.Abs`。严格的运行时能力仍由 `IFlushableLoggerFactory` 表达，而扩展方法让常见调用保持简单。
 
-### 溢出行为
+## PicoDI 集成
 
-同步和异步日志都会写入一个有界通道。
+`AddPicoLog()` 会注册：
 
-- 同步 `Log()` 和异步 `LogAsync()` 都遵循 `LoggerFactoryOptions.QueueFullMode`。
-- `LogAsync()` 或 `LogStructuredAsync()` 的完成，表示 logger 边界的交接处理已经结束。条目可能已被接受、因队列策略被丢弃，或在关闭期间被拒绝，并不表示 sink 已持久化完成。
-- 默认值是 `DropOldest`，它更偏向吞吐量和较低的调用方延迟，而不是保证交付。
-- `Wait` 会让调用方明确感受到背压，同步写入会阻塞到队列空间可用或 `SyncWriteTimeout` 到期，异步写入则会等待队列空间，直到请求取消。
-- `DropWrite` 会保留较早入队的条目，并通过 `OnMessagesDropped` 报告被丢弃的新条目。
-- 一旦 factory 开始释放，新的写入会被拒绝，而已经入队的条目会继续刷新。
+- 一个 singleton `ILoggerFactory`
+- 类型化 `ILogger<T>` 适配器
+- 在未显式配置 `WriteTo` 管线时的内置默认 sink 行为
+- 启用 `ReadFrom.RegisteredSinks()` 时对 DI 已注册 sink 的可选桥接
 
-对于一般应用日志，默认的 `DropOldest` 行为通常可以接受。对于审计类日志，请优先考虑 `Wait` 或专用的 sink 策略。
+对于新代码，请优先把 `WriteTo` sink builder 作为主要配置路径。
 
-### 内置指标
+```csharp
+container.AddPicoLog(options =>
+{
+    options.MinLevel = LogLevel.Info;
+    options.WriteTo.ColoredConsole();
+    options.WriteTo.File("logs/app.log");
+});
+```
 
-核心 `PicoLog` 包会通过 `System.Diagnostics.Metrics` 发出一组精简的内置指标，使用的 meter 名称为 `PicoLog`。
+你也可以桥接已经注册到 PicoDI 的 sink：
+
+```csharp
+container.Register(new SvcDescriptor(typeof(ILogSink), _ => new AuditSink()));
+
+container.AddPicoLog(options =>
+{
+    options.ReadFrom.RegisteredSinks();
+    options.WriteTo.ColoredConsole();
+});
+```
+
+## 指标
+
+核心 `PicoLog` 包会通过 `System.Diagnostics.Metrics` 发出一组精简内置指标，使用 meter 名称 `PicoLog`。
 
 - `picolog.entries.enqueued`
 - `picolog.entries.dropped`
@@ -279,7 +325,7 @@ logger.LogStructured(
 - `picolog.queue.entries`
 - `picolog.shutdown.drain.duration`
 
-这些 instrument 旨在保持低基数和轻量。你可以直接使用 `MeterListener` 观察它们，也可以将它们桥接到更广泛的遥测基础设施中。
+这些 instrument 有意保持低基数和轻量。
 
 ```csharp
 using var listener = new MeterListener();
@@ -295,7 +341,7 @@ listener.Start();
 
 ## AOT 兼容性
 
-示例项目会在启用 Native AOT 的情况下发布:
+示例项目会在启用 Native AOT 的情况下发布。
 
 ```xml
 <PropertyGroup>
@@ -307,7 +353,7 @@ listener.Start();
 dotnet publish -c Release -r win-x64 -p:PublishAOT=true
 ```
 
-仓库还包含一个发布级验证脚本，它会发布示例、运行生成的可执行文件，并验证最终的关闭日志条目已经正确刷新:
+仓库还包含一个发布级验证脚本，它会发布示例、运行生成的可执行文件，并验证最终的关闭日志条目已经正确刷新：
 
 ```powershell
 ./scripts/Validate-AotSample.ps1
@@ -335,66 +381,35 @@ dotnet build --configuration Release
 dotnet test --solution ./PicoLog.slnx --configuration Release
 ```
 
-## 性能考量
+## 性能说明
 
-- `LoggerFactory` 内部会按类别缓存 logger 实例。
-- `LoggerFactory` 为每个类别拥有一个有界通道、一个类别管线和一个后台排空任务。
-- factory 上的 `FlushAsync()` 是针对刷新快照之前已接受条目的屏障，不是释放的简写。
-- 释放 factory 仍然会在释放 sink 之前执行最终排空。
-- `FileSink` 在自身的有界队列上批量写入，会在批次边界或刷新间隔边界执行刷新，并通过 `IFlushableLogSink` 暴露 sink 级别刷新。
-- 选择 `DropOldest`、`DropWrite` 或 `Wait` 是吞吐量与交付能力之间的权衡，不是正确性缺陷。
+- logger 实例会在 `LoggerFactory` 内按类别缓存
+- `LoggerFactory` 为每个类别拥有一个有界通道、一个类别管线和一个后台排空任务
+- `FlushAsync()` 是针对 flush 快照之前已接受条目的 barrier，不是释放的捷径
+- factory 释放时仍会在释放 sink 之前执行最终排空
+- `FileSink` 会在自己的有界队列上批量写入，并通过 `IFlushableLogSink` 暴露 sink 级别 flush
+- 选择 `DropOldest`、`DropWrite` 或 `Wait` 是吞吐量与交付之间的权衡，不是正确性错误
 
 ## 基准测试
 
-仓库包含 `benchmarks/PicoLog.Benchmarks`，这是一个基于 PicoBench 的基准测试项目，用于比较 PicoLog 与 Microsoft.Extensions.Logging 基线之间的交接成本。
+仓库包含 `benchmarks/PicoLog.Benchmarks`，这是一个基于 PicoBench 的基准测试项目，用于比较 PicoLog 与 Microsoft.Extensions.Logging 基线的交接成本。
 
 - `MicrosoftAsyncHandoff` 是轻量的基于字符串通道的 MEL 基线。
-- `MicrosoftAsyncEntryHandoff` 是更公平的完整条目 MEL 基线，它会镜像 PicoLog 的 timestamp/category/message envelope 成本，而不加入真实 I/O。
-- `PicoWaitControl_CachedMessage` 和 `PicoWaitHandoff_CachedMessage` 用于覆盖 PicoLog 在 wait 模式下的背压表现，作为相对比较。
+- `MicrosoftAsyncEntryHandoff` 是更公平的完整条目 MEL 基线，它会模拟 PicoLog 的 timestamp/category/message envelope 成本，但不加入真实 I/O。
+- 像 `PicoWaitControl_*` 这样的 wait-mode benchmark 名称只是内部基准场景标签，不是公共 API 名称。
 
-运行基准测试项目:
+运行基准测试项目：
 
 ```bash
 dotnet run -c Release --project benchmarks/PicoLog.Benchmarks
 ```
 
-或者直接发布并执行产物:
+或直接发布并执行产物：
 
 ```bash
 dotnet publish benchmarks/PicoLog.Benchmarks/PicoLog.Benchmarks.csproj -c Release -r win-x64
 benchmarks/PicoLog.Benchmarks/bin/Release/net10.0/win-x64/publish/PicoLog.Benchmarks.exe main
 ```
-
-基准测试应用会写出:
-
-- `benchmark-results.md`
-- `benchmark-results-main.md`
-- `benchmark-results-wait.md`
-
-## 适用场景与非目标
-
-### 优势
-
-- 核心实现很小，也容易推理: `LoggerFactory` 拥有按类别的 logger 注册、类别管线、排空任务生命周期和 sink 生命周期，而每个 `InternalLogger` 仍然是轻量、无所有权的写入门面。
-- 项目对 AOT 友好，并避免依赖大量反射的基础设施，因此很适合 Native AOT、边缘和 IoT 工作负载。
-- 结构化属性和内置指标覆盖了常见的运维需求，同时不会强迫应用接入更庞大的日志生态。
-- 队列压力行为是显式的，而不是隐藏的。调用方可以在 `DropOldest`、`DropWrite` 和 `Wait` 之间选择，取决于吞吐量还是交付更重要。
-- 刷新语义保持显式。`FlushAsync()` 是已接受工作的屏障，而 `DisposeAsync()` 仍然是负责最终排空和释放资源的关闭路径。
-- 内置 PicoDI 集成保持轻薄且可预测，不会引入庞大的托管或配置栈。
-
-### 适用场景
-
-- 想要轻量日志核心、又不想引入更大日志生态的小型到中型 .NET 应用。
-- 对启动成本、二进制大小和 AOT 兼容性有要求的边缘、IoT、桌面和工具类工作负载。
-- 可以接受尽力交付、偶尔需要运行中刷新屏障，并且显式关闭排空已经足够的应用日志场景。
-- 偏好少量基础原语，并愿意按需添加自定义 sink 或格式化器的团队。
-
-### 非目标与薄弱点
-
-- 这不是一个完整的可观测性平台。它支持结构化属性和一小组内置指标，但不提供消息模板解析、enricher、滚动文件管理、远程传输 sink，或与更广泛遥测生态的深度集成。
-- 它没有针对超高基数的 logger 类别进行优化。当前设计会为每个类别创建一个 factory 拥有的类别管线和一个后台排空任务。
-- 对于不能接受静默丢失的审计或合规日志场景，它并不是默认合适的选择。默认队列模式偏向吞吐量，`LogAsync()` 完成也不表示 sink 已持久化完成，而更强的交付保证需要显式配置，例如 `Wait` 或专用 sink 策略。
-- 内置指标覆盖队列深度、已接受和已丢弃条目、sink 失败、关闭期间的迟到写入以及关闭排空时长。它们目前还没有提供按类别划分的指标、sink 延迟直方图或更大的端到端遥测模型。
 
 ## 扩展 PicoLog
 
@@ -422,12 +437,12 @@ await using var loggerFactory = new LoggerFactory([new CustomSink(), new FileSin
 await loggerFactory.FlushAsync();
 ```
 
-如果 sink 没有实现 `IFlushableLogSink`，`ILogSink.FlushAsync()` 扩展会以尽力而为方式立即完成。
+如果某个 sink 没有实现 `IFlushableLogSink`，`ILogSink.FlushAsync()` 扩展会以尽力而为方式立即完成。
 
-### 自定义格式化器
+### 自定义 Formatter
 
 ```csharp
-public class CustomFormatter : ILogFormatter
+public sealed class CustomFormatter : ILogFormatter
 {
     public string Format(LogEntry entry)
     {
@@ -438,15 +453,15 @@ public class CustomFormatter : ILogFormatter
 
 ## 测试
 
-当前测试套件覆盖:
+当前测试套件覆盖：
 
-- 文件 sink 写入与异步释放并发竞争
+- 文件 sink 写入与异步释放竞争
 - 按类别缓存 logger
 - 最低级别过滤
 - 结构化负载捕获与格式化
 - 内置指标发出
 - 在 factory 释放时捕获 scope 并完成刷新
-- 已接受条目的刷新屏障和尽力而为的刷新扩展
+- 已接受条目的 flush 屏障和尽力而为的 flush 扩展
 - 在关闭开始后拒绝写入
 - sink 失败隔离
 - 异步尾部消息刷新
@@ -454,7 +469,32 @@ public class CustomFormatter : ILogFormatter
 - 已配置的 DI 文件输出
 - PicoDI 类型化 logger 解析
 
-示例也会通过 Native AOT 发布和执行进行验证。
+示例也会通过 Native AOT 发布与执行来验证。
+
+## 适用场景与非目标
+
+### 优势
+
+- 核心实现很小，也容易推理：`LoggerFactory` 拥有按类别的注册、处理管线、排空任务生命周期与 sink 生命周期，而每个 `InternalLogger` 仍是轻量、非拥有型的写入门面。
+- 项目对 AOT 友好，并避免依赖大量反射的基础设施。
+- 结构化属性和内置指标覆盖常见运维需求，同时不会强迫应用接入更庞大的日志生态。
+- 队列压力行为是显式的，而不是隐藏的。
+- flush 语义保持明确：`FlushAsync()` 是已接受工作的 barrier，`DisposeAsync()` 则负责最终 shutdown drain 和资源释放。
+- 内置的 PicoDI 集成保持轻薄且可预测。
+
+### 适合的场景
+
+- 想要轻量日志核心、又不想引入更大日志生态的小型到中型 .NET 应用
+- 对启动成本、二进制大小和 AOT 兼容性有要求的边缘、IoT、桌面与工具型工作负载
+- 可以接受尽力交付、偶尔需要运行中 flush barrier，而且显式关闭排空已足够的应用日志场景
+- 偏好少量基础原语，并愿意按需添加自定义 sink 或 formatter 的团队
+
+### 非目标与薄弱点
+
+- 这不是完整的可观测性平台。
+- 它没有针对超高基数的 logger category 做优化，因为当前设计会为每个类别创建一个 factory 拥有的类别管线与一个后台排空任务。
+- 对于不能接受静默丢失的审计或合规日志场景，它并不是默认合适的选择。
+- 内置指标有意保持精简，不尝试建模更大的端到端遥测系统。
 
 ## 贡献
 
