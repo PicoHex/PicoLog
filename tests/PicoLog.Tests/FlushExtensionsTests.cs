@@ -111,10 +111,25 @@ public sealed class FlushExtensionsTests
 
         public void Log(LogLevel logLevel, string message, Exception? exception = null) { }
 
+        public void Log(
+            LogLevel logLevel,
+            string message,
+            IReadOnlyList<KeyValuePair<string, object?>>? properties,
+            Exception? exception
+        ) { }
+
         public Task LogAsync(
             LogLevel logLevel,
             string message,
             Exception? exception = null,
+            CancellationToken cancellationToken = default
+        ) => Task.CompletedTask;
+
+        public Task LogAsync(
+            LogLevel logLevel,
+            string message,
+            IReadOnlyList<KeyValuePair<string, object?>>? properties,
+            Exception? exception,
             CancellationToken cancellationToken = default
         ) => Task.CompletedTask;
     }

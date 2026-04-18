@@ -1,6 +1,6 @@
 namespace PicoLog;
 
-internal sealed class InternalLogger : IStructuredLogger
+internal sealed class InternalLogger : ILogger
 {
     private readonly string _categoryName;
     private readonly LoggerFactoryRuntime _runtime;
@@ -29,11 +29,11 @@ internal sealed class InternalLogger : IStructuredLogger
     public void Log(LogLevel logLevel, string message, Exception? exception = null) =>
         Write(logLevel, message, properties: null, exception);
 
-    public void LogStructured(
+    public void Log(
         LogLevel logLevel,
         string message,
-        IReadOnlyList<KeyValuePair<string, object?>>? properties = null,
-        Exception? exception = null
+        IReadOnlyList<KeyValuePair<string, object?>>? properties,
+        Exception? exception
     ) => Write(logLevel, message, properties, exception);
 
     public Task LogAsync(
@@ -43,11 +43,11 @@ internal sealed class InternalLogger : IStructuredLogger
         CancellationToken cancellationToken = default
     ) => WriteAsync(logLevel, message, properties: null, exception, cancellationToken);
 
-    public Task LogStructuredAsync(
+    public Task LogAsync(
         LogLevel logLevel,
         string message,
-        IReadOnlyList<KeyValuePair<string, object?>>? properties = null,
-        Exception? exception = null,
+        IReadOnlyList<KeyValuePair<string, object?>>? properties,
+        Exception? exception,
         CancellationToken cancellationToken = default
     ) => WriteAsync(logLevel, message, properties, exception, cancellationToken);
 

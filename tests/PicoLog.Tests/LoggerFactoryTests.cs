@@ -157,14 +157,29 @@ public sealed class LoggerFactoryTests
     }
 
     [Test]
-    public async Task CreateLogger_ReturnsStructuredLogger_RuntimeInstance()
+    public async Task CreateLogger_PreservesStructuredProperties_ThroughNativeILoggerOverload()
     {
         var sink = new CollectingSink();
         using var factory = new LoggerFactory([sink]);
 
         var logger = factory.CreateLogger("Tests.Category");
+        IReadOnlyList<KeyValuePair<string, object?>> properties =
+        [
+            new("tenant", "alpha"),
+            new("attempt", 3)
+        ];
 
-        await Assert.That(logger is IStructuredLogger).IsTrue();
+        logger.Log(LogLevel.Warning, "structured-runtime-instance", properties, exception: null);
+
+        await factory.DisposeAsync();
+
+        var entry = sink.Entries.Single();
+        await Assert.That(entry.Properties).IsNotNull();
+        await Assert.That(entry.Properties!).Count().IsEqualTo(2);
+        await Assert.That(entry.Properties[0].Key).IsEqualTo("tenant");
+        await Assert.That(entry.Properties[0].Value).IsEqualTo("alpha");
+        await Assert.That(entry.Properties[1].Key).IsEqualTo("attempt");
+        await Assert.That(entry.Properties[1].Value).IsEqualTo(3);
     }
 
     [Test]
@@ -256,8 +271,8 @@ public sealed class LoggerFactoryTests
             new("attempt", 3)
         ];
 
-        logger.LogStructured(LogLevel.Warning, "typed-sync-structured", properties);
-        await logger.LogStructuredAsync(LogLevel.Error, "typed-async-structured", properties);
+        logger.Log(LogLevel.Warning, "typed-sync-structured", properties, exception: null);
+        await logger.LogAsync(LogLevel.Error, "typed-async-structured", properties, exception: null);
         await factory.DisposeAsync();
 
         var entries = sink.Entries.ToArray();
@@ -291,7 +306,7 @@ public sealed class LoggerFactoryTests
             new("nullable", null)
         ];
 
-        logger.LogStructured(LogLevel.Warning, "structured-message", properties);
+        logger.Log(LogLevel.Warning, "structured-message", properties, exception: null);
         await factory.DisposeAsync();
 
         var entry = sink.Entries.Single();
@@ -352,7 +367,7 @@ public sealed class LoggerFactoryTests
         var logger = factory.CreateLogger("Tests.Category");
         var properties = new List<KeyValuePair<string, object?>> { new("tenant", "alpha") };
 
-        logger.LogStructured(LogLevel.Info, "snapshot", properties);
+        logger.Log(LogLevel.Info, "snapshot", properties, exception: null);
         properties[0] = new KeyValuePair<string, object?>("tenant", "mutated");
         properties.Add(new KeyValuePair<string, object?>("attempt", 2));
 
@@ -373,7 +388,7 @@ public sealed class LoggerFactoryTests
         var logger = factory.CreateLogger("Tests.Category");
         KeyValuePair<string, object?>[] properties = [new("tenant", "alpha")];
 
-        logger.LogStructured(LogLevel.Info, "snapshot", properties);
+        logger.Log(LogLevel.Info, "snapshot", properties, exception: null);
         properties[0] = new KeyValuePair<string, object?>("tenant", "mutated");
 
         await factory.DisposeAsync();
@@ -393,7 +408,7 @@ public sealed class LoggerFactoryTests
         var logger = factory.CreateLogger("Tests.Category");
         KeyValuePair<string, object?>[] properties = [];
 
-        logger.LogStructured(LogLevel.Info, "empty", properties);
+        logger.Log(LogLevel.Info, "empty", properties, exception: null);
         await factory.DisposeAsync();
 
         var entry = sink.Entries.Single();

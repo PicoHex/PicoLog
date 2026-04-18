@@ -53,14 +53,14 @@ public partial class LoggingBenchmarks
     public void PicoAsyncHandoff_CachedMessage_OneProperty()
     {
         for (var i = 0; i < N; i++)
-            _picoLogger.LogStructured(PicoLogLevel.Info, CachedMessage, OnePropertySet);
+            _picoLogger.Log(PicoLogLevel.Info, CachedMessage, OnePropertySet, exception: null);
     }
 
     [Benchmark]
     public void PicoAsyncHandoff_CachedMessage_FourProperties()
     {
         for (var i = 0; i < N; i++)
-            _picoLogger.LogStructured(PicoLogLevel.Info, CachedMessage, FourPropertySet);
+            _picoLogger.Log(PicoLogLevel.Info, CachedMessage, FourPropertySet, exception: null);
     }
 
     [Benchmark]
