@@ -5,7 +5,7 @@ public sealed class LoggerExtensionsTests
     [Test]
     public async Task SyncExtensions_ForwardExpectedLevels_And_Exceptions()
     {
-        var logger = new RecordingLogger();
+        var logger = new NativeStructuredRecordingLogger();
         var exception = new InvalidOperationException("sync-failure");
 
         logger.Trace("trace");
@@ -22,7 +22,6 @@ public sealed class LoggerExtensionsTests
         await Assert
             .That(logger.SyncEntries.Select(entry => entry.Level).ToArray())
             .IsEquivalentTo(
-
                 [
                     LogLevel.Trace,
                     LogLevel.Debug,
@@ -38,7 +37,6 @@ public sealed class LoggerExtensionsTests
         await Assert
             .That(logger.SyncEntries.Select(entry => entry.Message).ToArray())
             .IsEquivalentTo(
-
                 [
                     "trace",
                     "debug",
@@ -62,7 +60,7 @@ public sealed class LoggerExtensionsTests
     [Test]
     public async Task AsyncExtensions_ForwardExpectedLevels_Exceptions_And_CancellationToken()
     {
-        var logger = new RecordingLogger();
+        var logger = new NativeStructuredRecordingLogger();
         var exception = new InvalidOperationException("async-failure");
         using var cancellationSource = new CancellationTokenSource();
         var cancellationToken = cancellationSource.Token;
@@ -81,7 +79,6 @@ public sealed class LoggerExtensionsTests
         await Assert
             .That(logger.AsyncEntries.Select(entry => entry.Level).ToArray())
             .IsEquivalentTo(
-
                 [
                     LogLevel.Trace,
                     LogLevel.Debug,
@@ -97,7 +94,6 @@ public sealed class LoggerExtensionsTests
         await Assert
             .That(logger.AsyncEntries.Select(entry => entry.Message).ToArray())
             .IsEquivalentTo(
-
                 [
                     "trace",
                     "debug",
@@ -122,13 +118,14 @@ public sealed class LoggerExtensionsTests
     }
 
     [Test]
-    public async Task StructuredExtensions_UseStructuredLogger_WhenAvailable()
+    public async Task StructuredExtensions_DelegateToNativeILoggerPropertyOverloads_WhenAvailable()
     {
-        ILogger logger = new RecordingStructuredLogger();
+        ILogger logger = new NativeStructuredRecordingLogger();
         var exception = new InvalidOperationException("structured-failure");
         using var cancellationSource = new CancellationTokenSource();
         var cancellationToken = cancellationSource.Token;
-        IReadOnlyList<KeyValuePair<string, object?>> properties = [
+        IReadOnlyList<KeyValuePair<string, object?>> properties =
+        [
             new("tenant", "alpha"),
             new("attempt", 3)
         ];
@@ -142,25 +139,23 @@ public sealed class LoggerExtensionsTests
             cancellationToken
         );
 
-        var structuredLogger = (RecordingStructuredLogger)logger;
+        var recordingLogger = (NativeStructuredRecordingLogger)logger;
 
-        await Assert.That(structuredLogger.StructuredSyncEntries.Count).IsEqualTo(1);
-        await Assert.That(structuredLogger.StructuredAsyncEntries.Count).IsEqualTo(1);
-        await Assert.That(structuredLogger.StructuredSyncEntries[0].Properties[0].Key).IsEqualTo("tenant");
-        await Assert.That(structuredLogger.StructuredSyncEntries[0].Properties[0].Value).IsEqualTo("alpha");
-        await Assert.That(structuredLogger.StructuredAsyncEntries[0].Properties[1].Key).IsEqualTo("attempt");
-        await Assert.That(structuredLogger.StructuredAsyncEntries[0].Properties[1].Value).IsEqualTo(3);
-        await Assert
-            .That(structuredLogger.StructuredAsyncEntries[0].CancellationToken == cancellationToken)
-            .IsTrue();
-        await Assert.That(structuredLogger.SyncEntries.Count).IsEqualTo(0);
-        await Assert.That(structuredLogger.AsyncEntries.Count).IsEqualTo(0);
+        await Assert.That(recordingLogger.SyncStructuredEntries.Count).IsEqualTo(1);
+        await Assert.That(recordingLogger.AsyncStructuredEntries.Count).IsEqualTo(1);
+        await Assert.That(recordingLogger.SyncStructuredEntries[0].Properties[0].Key).IsEqualTo("tenant");
+        await Assert.That(recordingLogger.SyncStructuredEntries[0].Properties[0].Value).IsEqualTo("alpha");
+        await Assert.That(recordingLogger.AsyncStructuredEntries[0].Properties[1].Key).IsEqualTo("attempt");
+        await Assert.That(recordingLogger.AsyncStructuredEntries[0].Properties[1].Value).IsEqualTo(3);
+        await Assert.That(recordingLogger.AsyncStructuredEntries[0].CancellationToken == cancellationToken).IsTrue();
+        await Assert.That(recordingLogger.SyncEntries.Count).IsEqualTo(0);
+        await Assert.That(recordingLogger.AsyncEntries.Count).IsEqualTo(0);
     }
 
     [Test]
-    public async Task StructuredExtensions_OnPlainILogger_FallBackToLogCalls_And_DropStructuredProperties()
+    public async Task StructuredExtensions_OnLegacyILogger_FallBackToDefaultInterfaceMethods_And_DropStructuredProperties()
     {
-        var logger = new RecordingLogger();
+        ILogger logger = new LegacyRecordingLogger();
         var exception = new InvalidOperationException("plain-failure");
         using var cancellationSource = new CancellationTokenSource();
         var cancellationToken = cancellationSource.Token;
@@ -175,21 +170,23 @@ public sealed class LoggerExtensionsTests
             cancellationToken
         );
 
-        await Assert.That(logger.SyncEntries.Count).IsEqualTo(1);
-        await Assert.That(logger.AsyncEntries.Count).IsEqualTo(1);
-        await Assert.That(logger.SyncEntries[0].Level).IsEqualTo(LogLevel.Warning);
-        await Assert.That(logger.SyncEntries[0].Message).IsEqualTo("sync-fallback");
-        await Assert.That(logger.SyncEntries[0].Exception).IsSameReferenceAs(exception);
-        await Assert.That(logger.AsyncEntries[0].Level).IsEqualTo(LogLevel.Error);
-        await Assert.That(logger.AsyncEntries[0].Message).IsEqualTo("async-fallback");
-        await Assert.That(logger.AsyncEntries[0].Exception).IsSameReferenceAs(exception);
-        await Assert.That(logger.AsyncEntries[0].CancellationToken == cancellationToken).IsTrue();
+        var legacyLogger = (LegacyRecordingLogger)logger;
+
+        await Assert.That(legacyLogger.SyncEntries.Count).IsEqualTo(1);
+        await Assert.That(legacyLogger.AsyncEntries.Count).IsEqualTo(1);
+        await Assert.That(legacyLogger.SyncEntries[0].Level).IsEqualTo(LogLevel.Warning);
+        await Assert.That(legacyLogger.SyncEntries[0].Message).IsEqualTo("sync-fallback");
+        await Assert.That(legacyLogger.SyncEntries[0].Exception).IsSameReferenceAs(exception);
+        await Assert.That(legacyLogger.AsyncEntries[0].Level).IsEqualTo(LogLevel.Error);
+        await Assert.That(legacyLogger.AsyncEntries[0].Message).IsEqualTo("async-fallback");
+        await Assert.That(legacyLogger.AsyncEntries[0].Exception).IsSameReferenceAs(exception);
+        await Assert.That(legacyLogger.AsyncEntries[0].CancellationToken == cancellationToken).IsTrue();
     }
 
     [Test]
-    public async Task TypedLogger_WithPlainInnerLogger_UsesBestEffortStructuredFallback_And_DropsProperties()
+    public async Task TypedLogger_WithLegacyInnerLogger_UsesDefaultInterfaceFallback_And_DropsProperties()
     {
-        var innerLogger = new RecordingLogger();
+        var innerLogger = new LegacyRecordingLogger();
         var logger = new Logger<TypedCategory>(new StubLoggerFactory(innerLogger));
         var exception = new InvalidOperationException("typed-plain-failure");
         using var cancellationSource = new CancellationTokenSource();
@@ -216,10 +213,12 @@ public sealed class LoggerExtensionsTests
         await Assert.That(innerLogger.AsyncEntries[0].CancellationToken == cancellationToken).IsTrue();
     }
 
-    private sealed class RecordingLogger : ILogger
+    private sealed class NativeStructuredRecordingLogger : ILogger
     {
         public List<RecordedEntry> SyncEntries { get; } = [];
         public List<RecordedEntry> AsyncEntries { get; } = [];
+        public List<StructuredRecordedEntry> SyncStructuredEntries { get; } = [];
+        public List<StructuredRecordedEntry> AsyncStructuredEntries { get; } = [];
 
         public IDisposable BeginScope<TState>(TState state)
             where TState : notnull => NoopDisposable.Instance;
@@ -229,65 +228,38 @@ public sealed class LoggerExtensionsTests
             SyncEntries.Add(new RecordedEntry(logLevel, message, exception, default));
         }
 
-        public Task LogAsync(
+        public void Log(
             LogLevel logLevel,
             string message,
-            Exception? exception = null,
-            CancellationToken cancellationToken = default
+            IReadOnlyList<KeyValuePair<string, object?>>? properties,
+            Exception? exception
         )
         {
-            AsyncEntries.Add(new RecordedEntry(logLevel, message, exception, cancellationToken));
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingStructuredLogger : IStructuredLogger
-    {
-        public List<StructuredRecordedEntry> StructuredSyncEntries { get; } = [];
-        public List<StructuredRecordedEntry> StructuredAsyncEntries { get; } = [];
-        public List<RecordedEntry> SyncEntries { get; } = [];
-        public List<RecordedEntry> AsyncEntries { get; } = [];
-
-        public IDisposable BeginScope<TState>(TState state)
-            where TState : notnull => NoopDisposable.Instance;
-
-        public void Log(LogLevel logLevel, string message, Exception? exception = null)
-        {
-            SyncEntries.Add(new RecordedEntry(logLevel, message, exception, default));
-        }
-
-        public Task LogAsync(
-            LogLevel logLevel,
-            string message,
-            Exception? exception = null,
-            CancellationToken cancellationToken = default
-        )
-        {
-            AsyncEntries.Add(new RecordedEntry(logLevel, message, exception, cancellationToken));
-            return Task.CompletedTask;
-        }
-
-        public void LogStructured(
-            LogLevel logLevel,
-            string message,
-            IReadOnlyList<KeyValuePair<string, object?>>? properties = null,
-            Exception? exception = null
-        )
-        {
-            StructuredSyncEntries.Add(
+            SyncStructuredEntries.Add(
                 new StructuredRecordedEntry(logLevel, message, properties ?? [], exception, default)
             );
         }
 
-        public Task LogStructuredAsync(
+        public Task LogAsync(
             LogLevel logLevel,
             string message,
-            IReadOnlyList<KeyValuePair<string, object?>>? properties = null,
             Exception? exception = null,
             CancellationToken cancellationToken = default
         )
         {
-            StructuredAsyncEntries.Add(
+            AsyncEntries.Add(new RecordedEntry(logLevel, message, exception, cancellationToken));
+            return Task.CompletedTask;
+        }
+
+        public Task LogAsync(
+            LogLevel logLevel,
+            string message,
+            IReadOnlyList<KeyValuePair<string, object?>>? properties,
+            Exception? exception,
+            CancellationToken cancellationToken = default
+        )
+        {
+            AsyncStructuredEntries.Add(
                 new StructuredRecordedEntry(
                     logLevel,
                     message,
@@ -296,6 +268,53 @@ public sealed class LoggerExtensionsTests
                     cancellationToken
                 )
             );
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class LegacyRecordingLogger : ILogger
+    {
+        public List<RecordedEntry> SyncEntries { get; } = [];
+        public List<RecordedEntry> AsyncEntries { get; } = [];
+
+        public IDisposable BeginScope<TState>(TState state)
+            where TState : notnull => NoopDisposable.Instance;
+
+        public void Log(LogLevel logLevel, string message, Exception? exception = null)
+        {
+            SyncEntries.Add(new RecordedEntry(logLevel, message, exception, default));
+        }
+
+        public void Log(
+            LogLevel logLevel,
+            string message,
+            IReadOnlyList<KeyValuePair<string, object?>>? properties,
+            Exception? exception
+        )
+        {
+            SyncEntries.Add(new RecordedEntry(logLevel, message, exception, default));
+        }
+
+        public Task LogAsync(
+            LogLevel logLevel,
+            string message,
+            Exception? exception = null,
+            CancellationToken cancellationToken = default
+        )
+        {
+            AsyncEntries.Add(new RecordedEntry(logLevel, message, exception, cancellationToken));
+            return Task.CompletedTask;
+        }
+
+        public Task LogAsync(
+            LogLevel logLevel,
+            string message,
+            IReadOnlyList<KeyValuePair<string, object?>>? properties,
+            Exception? exception,
+            CancellationToken cancellationToken = default
+        )
+        {
+            AsyncEntries.Add(new RecordedEntry(logLevel, message, exception, cancellationToken));
             return Task.CompletedTask;
         }
     }

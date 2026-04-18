@@ -2,71 +2,28 @@
 
 public static class LoggerExtensions
 {
-    private static void LogStructuredOrFallback(
-        ILogger logger,
-        LogLevel logLevel,
-        string message,
-        IReadOnlyList<KeyValuePair<string, object?>>? properties,
-        Exception? exception
-    )
-    {
-        if (logger is IStructuredLogger structuredLogger)
-        {
-            structuredLogger.LogStructured(logLevel, message, properties, exception);
-            return;
-        }
-
-        logger.Log(logLevel, message, exception);
-    }
-
-    private static Task LogStructuredAsyncOrFallback(
-        ILogger logger,
-        LogLevel logLevel,
-        string message,
-        IReadOnlyList<KeyValuePair<string, object?>>? properties,
-        Exception? exception,
-        CancellationToken cancellationToken
-    )
-    {
-        if (logger is IStructuredLogger structuredLogger)
-            return structuredLogger.LogStructuredAsync(
-                logLevel,
-                message,
-                properties,
-                exception,
-                cancellationToken
-            );
-
-        return logger.LogAsync(logLevel, message, exception, cancellationToken);
-    }
-
     extension(ILogger logger)
     {
         /// <summary>
-        /// Best-effort structured logging helper for <see cref="ILogger"/>.
+        /// Convenience helper for structured logging on <see cref="ILogger"/>.
         /// </summary>
         /// <remarks>
-        /// When the runtime logger also implements <see cref="IStructuredLogger"/>, the supplied
-        /// <paramref name="properties"/> are forwarded and preserved. Otherwise this call falls
-        /// back to <see cref="ILogger.Log(LogLevel, string, Exception?)"/>, so the message, level,
-        /// and exception are still written but structured properties are discarded.
+        /// This helper forwards to the native <see cref="ILogger.Log(LogLevel, string, IReadOnlyList{KeyValuePair{string, object?}}?, Exception?)"/>
+        /// overload.
         /// </remarks>
         public void LogStructured(
             LogLevel logLevel,
             string message,
             IReadOnlyList<KeyValuePair<string, object?>>? properties = null,
             Exception? exception = null
-        ) => LogStructuredOrFallback(logger, logLevel, message, properties, exception);
+        ) => logger.Log(logLevel, message, properties, exception);
 
         /// <summary>
-        /// Best-effort structured logging helper for <see cref="ILogger"/>.
+        /// Convenience helper for structured logging on <see cref="ILogger"/>.
         /// </summary>
         /// <remarks>
-        /// When the runtime logger also implements <see cref="IStructuredLogger"/>, the supplied
-        /// <paramref name="properties"/> are forwarded and preserved. Otherwise this call falls
-        /// back to <see cref="ILogger.LogAsync(LogLevel, string, Exception?, CancellationToken)"/>,
-        /// so the message, level, exception, and cancellation token still flow through while
-        /// structured properties are discarded.
+        /// This helper forwards to the native <see cref="ILogger.LogAsync(LogLevel, string, IReadOnlyList{KeyValuePair{string, object?}}?, Exception?, CancellationToken)"/>
+        /// overload.
         /// </remarks>
         public Task LogStructuredAsync(
             LogLevel logLevel,
@@ -74,14 +31,7 @@ public static class LoggerExtensions
             IReadOnlyList<KeyValuePair<string, object?>>? properties = null,
             Exception? exception = null,
             CancellationToken cancellationToken = default
-        ) => LogStructuredAsyncOrFallback(
-            logger,
-            logLevel,
-            message,
-            properties,
-            exception,
-            cancellationToken
-        );
+        ) => logger.LogAsync(logLevel, message, properties, exception, cancellationToken);
 
         /// <summary>
         /// Logs a message at <see cref="LogLevel.Trace"/> level.
