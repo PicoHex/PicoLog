@@ -1137,6 +1137,27 @@ public sealed class LoggerFactoryTests
     }
 
     [Test]
+    public async Task FlushAsync_Completes_And_PreservesLoggerReuse_ForSameCategory()
+    {
+        var sink = new CollectingSink();
+        await using var factory = new LoggerFactory([sink]);
+
+        var firstLogger = factory.CreateLogger("Tests.FlushReuse");
+
+        firstLogger.Info("before-flush");
+        await factory.FlushAsync();
+
+        var secondLogger = factory.CreateLogger("Tests.FlushReuse");
+        secondLogger.Info("after-flush");
+
+        await factory.DisposeAsync();
+
+        await Assert.That(firstLogger).IsSameReferenceAs(secondLogger);
+        await Assert.That(sink.Entries.Select(entry => entry.Message ?? string.Empty).ToArray())
+            .IsEquivalentTo(["before-flush", "after-flush"]);
+    }
+
+    [Test]
     public async Task FactoryDisposeAsync_ClassifiesPendingWaitWrites_AsRejectedAfterShutdown()
     {
         using var listener = new MeterListener();

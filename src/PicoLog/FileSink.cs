@@ -7,17 +7,13 @@ public sealed class FileSink : ILogSink, IFlushableLogSink
     private readonly FileSinkOptions _options;
     private readonly StreamWriter _writer;
     private readonly Task _processingTask;
-    private readonly Lock _stateLock = new();
+    private readonly Lock _batchDelayStateLock = new();
     private readonly SemaphoreSlim _flushSemaphore = new(1, 1);
+    private readonly FlushQuiesceCoordinator _flushQuiesceCoordinator = new();
     private int _disposeState;
-    private int _flushPending;
     private int _queuedMessages;
-    private int _activeWriteOperations;
     private int _activeDequeuedMessages;
     private int _activeBatchOperations;
-    private TaskCompletionSource? _writesResumedTcs;
-    private TaskCompletionSource? _writesQuiescedTcs;
-    private TaskCompletionSource? _idleTcs;
     private CancellationTokenSource? _batchDelayCancellationSource;
 
     public FileSink(ILogFormatter formatter, string filePath = FileSinkOptions.DefaultFilePath)
@@ -206,155 +202,58 @@ public sealed class FileSink : ILogSink, IFlushableLogSink
         GC.SuppressFinalize(this);
     }
 
-    private async ValueTask<bool> EnterWriteOperationAsync(CancellationToken cancellationToken)
-    {
-        while (true)
-        {
-            Task waitTask;
-
-            lock (_stateLock)
-            {
-                if (Volatile.Read(ref _disposeState) != 0)
-                    return false;
-
-                if (_flushPending == 0)
-                {
-                    _activeWriteOperations++;
-                    return true;
-                }
-
-                waitTask = (_writesResumedTcs ??= CreateSignal()).Task;
-            }
-
-            await waitTask.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
-    }
+    private ValueTask<bool> EnterWriteOperationAsync(CancellationToken cancellationToken)
+        => _flushQuiesceCoordinator.TryEnterWriteOperationAsync(
+            CanEnterWriteOperationUnderLock,
+            cancellationToken
+        );
 
     private void ExitWriteOperation()
-    {
-        TaskCompletionSource? writesQuiesced = null;
+        => _flushQuiesceCoordinator.ExitWriteOperation();
 
-        lock (_stateLock)
-        {
-            _activeWriteOperations--;
+    private ValueTask BlockWritesAsync(CancellationToken cancellationToken)
+        => _flushQuiesceCoordinator.BlockWritesAsync(cancellationToken);
 
-            if (_activeWriteOperations == 0 && _flushPending != 0)
-                writesQuiesced = _writesQuiescedTcs;
-        }
-
-        writesQuiesced?.TrySetResult();
-    }
-
-    private async ValueTask BlockWritesAsync(CancellationToken cancellationToken)
-    {
-        Task? waitTask = null;
-
-        lock (_stateLock)
-        {
-            _flushPending = 1;
-
-            if (_activeWriteOperations != 0)
-                waitTask = (_writesQuiescedTcs ??= CreateSignal()).Task;
-        }
-
-        if (waitTask is not null)
-            await waitTask.WaitAsync(cancellationToken).ConfigureAwait(false);
-    }
-
-    private async ValueTask WaitForIdleAsync(CancellationToken cancellationToken)
-    {
-        Task? waitTask = null;
-
-        lock (_stateLock)
-        {
-            if (!IsIdleUnderLock())
-                waitTask = (_idleTcs ??= CreateSignal()).Task;
-        }
-
-        if (waitTask is not null)
-            await waitTask.WaitAsync(cancellationToken).ConfigureAwait(false);
-    }
+    private ValueTask WaitForIdleAsync(CancellationToken cancellationToken)
+        => _flushQuiesceCoordinator.WaitForIdleAsync(IsOwnerIdleUnderLock, cancellationToken);
 
     private void ResumeWrites()
-    {
-        TaskCompletionSource? writesResumed;
-
-        lock (_stateLock)
-        {
-            _flushPending = 0;
-            _writesQuiescedTcs = null;
-            _idleTcs = null;
-            writesResumed = _writesResumedTcs;
-            _writesResumedTcs = null;
-        }
-
-        writesResumed?.TrySetResult();
-    }
+        => _flushQuiesceCoordinator.ResumeWrites();
 
     private void BeginBatch()
-    {
-        lock (_stateLock)
-            _activeBatchOperations++;
-    }
+        => _flushQuiesceCoordinator.BeginOwnerActivity(() => _activeBatchOperations++);
 
     private void BeginDequeuedMessage()
-    {
-        lock (_stateLock)
-            _activeDequeuedMessages++;
-    }
+        => _flushQuiesceCoordinator.BeginOwnerActivity(() => _activeDequeuedMessages++);
 
     private void EndDequeuedMessage()
-    {
-        TaskCompletionSource? idleSignal = null;
-
-        lock (_stateLock)
-        {
-            _activeDequeuedMessages--;
-
-            if (IsIdleUnderLock())
-                idleSignal = _idleTcs;
-        }
-
-        idleSignal?.TrySetResult();
-    }
+        => _flushQuiesceCoordinator.EndOwnerActivity(
+            () => _activeDequeuedMessages--,
+            IsOwnerIdleUnderLock
+        );
 
     private void EndBatch()
-    {
-        TaskCompletionSource? idleSignal = null;
+        => _flushQuiesceCoordinator.EndOwnerActivity(
+            () => _activeBatchOperations--,
+            IsOwnerIdleUnderLock
+        );
 
-        lock (_stateLock)
-        {
-            _activeBatchOperations--;
+    private bool IsFlushPending() => _flushQuiesceCoordinator.IsFlushPending();
 
-            if (IsIdleUnderLock())
-                idleSignal = _idleTcs;
-        }
-
-        idleSignal?.TrySetResult();
-    }
-
-    private bool IsFlushPending()
-    {
-        lock (_stateLock)
-            return _flushPending != 0;
-    }
-
-    private bool IsIdleUnderLock() =>
-        _flushPending != 0
-        && _activeWriteOperations == 0
-        && _activeDequeuedMessages == 0
+    private bool IsOwnerIdleUnderLock() =>
+        _activeDequeuedMessages == 0
         && _activeBatchOperations == 0
         && Volatile.Read(ref _queuedMessages) == 0;
 
     private void RegisterBatchDelayCancellationSource(CancellationTokenSource source)
     {
-        lock (_stateLock)
+        lock (_batchDelayStateLock)
             _batchDelayCancellationSource = source;
     }
 
     private void ClearBatchDelayCancellationSource(CancellationTokenSource source)
     {
-        lock (_stateLock)
+        lock (_batchDelayStateLock)
         {
             if (ReferenceEquals(_batchDelayCancellationSource, source))
                 _batchDelayCancellationSource = null;
@@ -365,7 +264,7 @@ public sealed class FileSink : ILogSink, IFlushableLogSink
     {
         CancellationTokenSource? batchDelayCancellationSource;
 
-        lock (_stateLock)
+        lock (_batchDelayStateLock)
             batchDelayCancellationSource = _batchDelayCancellationSource;
 
         if (batchDelayCancellationSource is null)
@@ -381,6 +280,5 @@ public sealed class FileSink : ILogSink, IFlushableLogSink
         }
     }
 
-    private static TaskCompletionSource CreateSignal() =>
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private bool CanEnterWriteOperationUnderLock() => Volatile.Read(ref _disposeState) == 0;
 }

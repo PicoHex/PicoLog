@@ -1,5 +1,7 @@
 namespace PicoLog.Tests;
 
+// Extraction guardrail: keep flush as an internal helper-only concern here.
+// Do not unify queue-policy semantics or reorder lifecycle steps while sharing coordination logic.
 public sealed class LoggerFactoryFlushTests
 {
     [Test]
@@ -14,6 +16,11 @@ public sealed class LoggerFactoryFlushTests
             await firstLogger.InfoAsync("before-flush");
 
             await factory.FlushAsync();
+
+            await Assert.That(sink.DisposeCallCount).IsEqualTo(0);
+            await Assert.That(sink.FlushCallCount).IsEqualTo(1);
+            await Assert.That(sink.Entries.Select(entry => entry.Message ?? string.Empty).ToArray())
+                .IsEquivalentTo(["before-flush"]);
 
             var secondLogger = factory.CreateLogger("Tests.Category");
             await secondLogger.InfoAsync("after-flush");
@@ -46,7 +53,6 @@ public sealed class LoggerFactoryFlushTests
 
             var flushTask = factory.FlushAsync().AsTask();
 
-            await Task.Delay(50);
             await Assert.That(flushTask.IsCompleted).IsFalse();
             await Assert.That(sink.FlushCallCount).IsEqualTo(0);
 
@@ -81,7 +87,7 @@ public sealed class LoggerFactoryFlushTests
             using var cancellationSource = new CancellationTokenSource();
             var flushTask = factory.FlushAsync(cancellationSource.Token).AsTask();
 
-            await Task.Delay(50);
+            await Assert.That(flushTask.IsCompleted).IsFalse();
             cancellationSource.Cancel();
             sink.ReleaseWrite();
 
@@ -106,11 +112,107 @@ public sealed class LoggerFactoryFlushTests
                     .IsNotEmpty();
             }
 
+            await Assert.That(sink.FlushCallCount).IsEqualTo(0);
+
             await logger.InfoAsync("second");
             await factory.FlushAsync();
 
+            await Assert.That(sink.FlushCallCount).IsEqualTo(1);
             await Assert.That(sink.Entries.Select(entry => entry.Message ?? string.Empty).ToArray())
                 .IsEquivalentTo(["first", "second"]);
+        }
+        finally
+        {
+            sink.ReleaseWrite();
+            await factory.DisposeAsync();
+        }
+    }
+
+    [Test]
+    public async Task FlushAsync_OnEmptyQueues_Completes_And_InvokesOptionalSinkFlush()
+    {
+        var sink = new CollectingFlushableSink();
+        ILoggerFactory factory = new LoggerFactory([sink]);
+
+        try
+        {
+            _ = factory.CreateLogger("Tests.Category");
+
+            await factory.FlushAsync();
+
+            await Assert.That(sink.FlushCallCount).IsEqualTo(1);
+            await Assert.That(sink.DisposeCallCount).IsEqualTo(0);
+            await Assert.That(sink.Entries.Select(entry => entry.Message ?? string.Empty).ToArray())
+                .Count()
+                .IsEqualTo(0);
+        }
+        finally
+        {
+            await factory.DisposeAsync();
+        }
+    }
+
+    [Test]
+    public async Task ConcurrentFlushAsync_OnSameFactory_Completes_WithoutDeadlock_And_FlushesEachCall()
+    {
+        var sink = new CoordinatedFlushableSink();
+        ILoggerFactory factory = new LoggerFactory([sink]);
+
+        try
+        {
+            var logger = factory.CreateLogger("Tests.Category");
+
+            await logger.InfoAsync("payload");
+            await sink.WriteStarted;
+
+            var firstFlushTask = factory.FlushAsync().AsTask();
+            var secondFlushTask = factory.FlushAsync().AsTask();
+
+            await Assert.That(firstFlushTask.IsCompleted).IsFalse();
+            await Assert.That(secondFlushTask.IsCompleted).IsFalse();
+
+            sink.ReleaseWrite();
+
+            await Task.WhenAll(firstFlushTask, secondFlushTask).WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(sink.FlushCallCount).IsEqualTo(2);
+            await Assert.That(sink.Entries.Select(entry => entry.Message ?? string.Empty).ToArray())
+                .IsEquivalentTo(["payload"]);
+        }
+        finally
+        {
+            sink.ReleaseWrite();
+            await factory.DisposeAsync();
+        }
+    }
+
+    [Test]
+    public async Task FlushAsync_And_DisposeAsync_Race_Completes_WithoutDeadlock_WhenFlushAlreadyStarted()
+    {
+        var sink = new CoordinatedFlushableSink();
+        ILoggerFactory factory = new LoggerFactory([sink]);
+
+        try
+        {
+            var logger = factory.CreateLogger("Tests.Category");
+
+            await logger.InfoAsync("payload");
+            await sink.WriteStarted;
+
+            var flushTask = factory.FlushAsync().AsTask();
+            var disposeTask = factory.DisposeAsync().AsTask();
+
+            await Assert.That(flushTask.IsCompleted).IsFalse();
+            await Assert.That(disposeTask.IsCompleted).IsFalse();
+
+            sink.ReleaseWrite();
+
+            await Task.WhenAll(flushTask, disposeTask).WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(sink.FlushCallCount).IsEqualTo(1);
+            await Assert.That(sink.DisposeCallCount).IsEqualTo(1);
+            await Assert.That(sink.Entries.Select(entry => entry.Message ?? string.Empty).ToArray())
+                .IsEquivalentTo(["payload"]);
         }
         finally
         {
@@ -247,12 +349,15 @@ public sealed class LoggerFactoryFlushTests
         private readonly TaskCompletionSource _releaseWrite =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _flushCallCount;
+        private int _disposeCallCount;
 
         public IReadOnlyCollection<LogEntry> Entries => _entries.ToArray();
 
         public Task WriteStarted => _writeStarted.Task;
 
         public int FlushCallCount => Volatile.Read(ref _flushCallCount);
+
+        public int DisposeCallCount => Volatile.Read(ref _disposeCallCount);
 
         public async Task WriteAsync(LogEntry entry, CancellationToken cancellationToken = default)
         {
@@ -269,9 +374,13 @@ public sealed class LoggerFactoryFlushTests
             return ValueTask.CompletedTask;
         }
 
-        public void Dispose() { }
+        public void Dispose() => Interlocked.Increment(ref _disposeCallCount);
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync()
+        {
+            Interlocked.Increment(ref _disposeCallCount);
+            return ValueTask.CompletedTask;
+        }
     }
 
     private static async Task<string> ReadAllTextWithSharedReadWriteAsync(string filePath)

@@ -24,9 +24,7 @@ public sealed class AssemblySurfaceTests
     [Test]
     public async Task PicoLog_ContainsRuntimeAndExtensibilityContracts()
     {
-        var picoLogAssembly = AppDomain.CurrentDomain
-            .GetAssemblies()
-            .Single(assembly => string.Equals(assembly.GetName().Name, "PicoLog", StringComparison.Ordinal));
+        var picoLogAssembly = typeof(LoggerFactory).Assembly;
 
         await Assert.That(picoLogAssembly.GetType("PicoLog.ILogSink")).IsNotNull();
         await Assert.That(picoLogAssembly.GetType("PicoLog.IFlushableLogSink")).IsNotNull();

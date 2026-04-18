@@ -8,17 +8,12 @@ internal sealed class CategoryPipeline : IDisposable, IAsyncDisposable
     private readonly InternalLoggerQueue _queue;
     private readonly Task _processingTask;
     private readonly int _queueDepthProviderId;
-    private readonly Lock _stateLock = new();
     private readonly SemaphoreSlim _flushSemaphore = new(1, 1);
+    private readonly FlushQuiesceCoordinator _flushQuiesceCoordinator = new();
     private int _disposeState;
-    private int _flushPending;
-    private int _activeWriteOperations;
     private int _activeDequeuedEntries;
     private int _activeDispatchOperations;
     private long _droppedEntries;
-    private TaskCompletionSource? _writesResumedTcs;
-    private TaskCompletionSource? _writesQuiescedTcs;
-    private TaskCompletionSource? _idleTcs;
 
     public CategoryPipeline(string categoryName, LoggerFactoryRuntime runtime)
     {
@@ -150,157 +145,43 @@ internal sealed class CategoryPipeline : IDisposable, IAsyncDisposable
     }
 
     private void EnterWriteOperationSync()
-    {
-        while (true)
-        {
-            Task waitTask;
+        => _flushQuiesceCoordinator.EnterWriteOperationSync();
 
-            lock (_stateLock)
-            {
-                if (_flushPending == 0)
-                {
-                    _activeWriteOperations++;
-                    return;
-                }
-
-                waitTask = (_writesResumedTcs ??= CreateSignal()).Task;
-            }
-
-            waitTask.GetAwaiter().GetResult();
-        }
-    }
-
-    private async ValueTask EnterWriteOperationAsync(CancellationToken cancellationToken)
-    {
-        while (true)
-        {
-            Task waitTask;
-
-            lock (_stateLock)
-            {
-                if (_flushPending == 0)
-                {
-                    _activeWriteOperations++;
-                    return;
-                }
-
-                waitTask = (_writesResumedTcs ??= CreateSignal()).Task;
-            }
-
-            await waitTask.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
-    }
+    private ValueTask EnterWriteOperationAsync(CancellationToken cancellationToken)
+        => _flushQuiesceCoordinator.EnterWriteOperationAsync(cancellationToken);
 
     private void ExitWriteOperation()
-    {
-        TaskCompletionSource? writesQuiesced = null;
+        => _flushQuiesceCoordinator.ExitWriteOperation();
 
-        lock (_stateLock)
-        {
-            _activeWriteOperations--;
+    private ValueTask BlockWritesAsync(CancellationToken cancellationToken)
+        => _flushQuiesceCoordinator.BlockWritesAsync(cancellationToken);
 
-            if (_activeWriteOperations == 0 && _flushPending != 0)
-                writesQuiesced = _writesQuiescedTcs;
-        }
-
-        writesQuiesced?.TrySetResult();
-    }
-
-    private async ValueTask BlockWritesAsync(CancellationToken cancellationToken)
-    {
-        Task? waitTask = null;
-
-        lock (_stateLock)
-        {
-            _flushPending = 1;
-
-            if (_activeWriteOperations != 0)
-                waitTask = (_writesQuiescedTcs ??= CreateSignal()).Task;
-        }
-
-        if (waitTask is not null)
-            await waitTask.WaitAsync(cancellationToken).ConfigureAwait(false);
-    }
-
-    private async ValueTask WaitForIdleAsync(CancellationToken cancellationToken)
-    {
-        Task? waitTask = null;
-
-        lock (_stateLock)
-        {
-            if (!IsIdleUnderLock())
-                waitTask = (_idleTcs ??= CreateSignal()).Task;
-        }
-
-        if (waitTask is not null)
-            await waitTask.WaitAsync(cancellationToken).ConfigureAwait(false);
-    }
+    private ValueTask WaitForIdleAsync(CancellationToken cancellationToken)
+        => _flushQuiesceCoordinator.WaitForIdleAsync(IsOwnerIdleUnderLock, cancellationToken);
 
     private void ResumeWrites()
-    {
-        TaskCompletionSource? writesResumed;
-
-        lock (_stateLock)
-        {
-            _flushPending = 0;
-            _writesQuiescedTcs = null;
-            _idleTcs = null;
-            writesResumed = _writesResumedTcs;
-            _writesResumedTcs = null;
-        }
-
-        writesResumed?.TrySetResult();
-    }
+        => _flushQuiesceCoordinator.ResumeWrites();
 
     private void BeginDispatch()
-    {
-        lock (_stateLock)
-            _activeDispatchOperations++;
-    }
+        => _flushQuiesceCoordinator.BeginOwnerActivity(() => _activeDispatchOperations++);
 
     private void BeginDequeuedEntry()
-    {
-        lock (_stateLock)
-            _activeDequeuedEntries++;
-    }
+        => _flushQuiesceCoordinator.BeginOwnerActivity(() => _activeDequeuedEntries++);
 
     private void EndDequeuedEntry()
-    {
-        TaskCompletionSource? idleSignal = null;
-
-        lock (_stateLock)
-        {
-            _activeDequeuedEntries--;
-
-            if (IsIdleUnderLock())
-                idleSignal = _idleTcs;
-        }
-
-        idleSignal?.TrySetResult();
-    }
+        => _flushQuiesceCoordinator.EndOwnerActivity(
+            () => _activeDequeuedEntries--,
+            IsOwnerIdleUnderLock
+        );
 
     private void EndDispatch()
-    {
-        TaskCompletionSource? idleSignal = null;
+        => _flushQuiesceCoordinator.EndOwnerActivity(
+            () => _activeDispatchOperations--,
+            IsOwnerIdleUnderLock
+        );
 
-        lock (_stateLock)
-        {
-            _activeDispatchOperations--;
-
-            if (IsIdleUnderLock())
-                idleSignal = _idleTcs;
-        }
-
-        idleSignal?.TrySetResult();
-    }
-
-    private bool IsIdleUnderLock() =>
-        _flushPending != 0
-        && _activeWriteOperations == 0
-        && _activeDequeuedEntries == 0
+    private bool IsOwnerIdleUnderLock() =>
+        _activeDequeuedEntries == 0
         && _activeDispatchOperations == 0
         && _queue.GetQueuedEntryCount() == 0;
-
-    private static TaskCompletionSource CreateSignal() =>
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
 }

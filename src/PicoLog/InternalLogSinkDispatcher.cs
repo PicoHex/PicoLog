@@ -13,15 +13,6 @@ internal sealed class InternalLogSinkDispatcher
         _consoleFallbackSink = ResolveLastRegisteredConsoleFallbackSink(_sinks);
     }
 
-    public async Task ProcessEntriesAsync(InternalLoggerQueue queue)
-    {
-        while (await queue.WaitToReadAsync().ConfigureAwait(false))
-        {
-            while (queue.TryRead(out var entry))
-                await DispatchEntryAsync(entry).ConfigureAwait(false);
-        }
-    }
-
     internal async Task DispatchEntryAsync(LogEntry entry)
     {
         foreach (var sink in _sinks)
