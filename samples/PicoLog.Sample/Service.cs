@@ -63,5 +63,12 @@ public class Service(ILogger<Service> logger) : IService
         // Finish with two shutdown messages that should survive factory disposal.
         await logger.NoticeAsync("24. Application shutting down...");
         await logger.InfoAsync("25. Press any key to exit...");
+
+        logger.Log(
+            LogLevel.Info,
+            "26. Export pipeline finished",
+            [new("records", 128), new("elapsedMs", stopwatch.ElapsedMilliseconds)],
+            exception: null
+        );
     }
 }
