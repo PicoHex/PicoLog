@@ -6,7 +6,14 @@ public sealed class ConsoleFormatter : ILogFormatter
     {
         var sb = new StringBuilder(Math.Max(128, (entry.Message?.Length ?? 0) + 64))
             .Append('[')
-            .Append(entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture))
+            .Append(
+                entry
+                    .Timestamp
+                    .ToString(
+                        "yyyy-MM-dd HH:mm:ss.fff",
+                        System.Globalization.CultureInfo.InvariantCulture
+                    )
+            )
             .Append("] ")
             .Append(GetLevelText(entry.Level))
             .Append(' ')
@@ -81,35 +88,30 @@ public sealed class ConsoleFormatter : ILogFormatter
 
     private static void AppendPropertyValue(StringBuilder builder, object? value)
     {
-        if (value is null)
+        switch (value)
         {
-            builder.Append("null");
-            return;
+            case null:
+                builder.Append("null");
+                return;
+            case string text:
+                builder.Append('"');
+                AppendEscapedString(builder, text);
+                builder.Append('"');
+                return;
+            case char character:
+                builder.Append('"');
+                AppendEscapedCharacter(builder, character);
+                builder.Append('"');
+                return;
+            case IFormattable formattable:
+                builder.Append(
+                    formattable.ToString(null, System.Globalization.CultureInfo.InvariantCulture)
+                );
+                return;
+            default:
+                builder.Append(value);
+                break;
         }
-
-        if (value is string text)
-        {
-            builder.Append('"');
-            AppendEscapedString(builder, text);
-            builder.Append('"');
-            return;
-        }
-
-        if (value is char character)
-        {
-            builder.Append('"');
-            AppendEscapedCharacter(builder, character);
-            builder.Append('"');
-            return;
-        }
-
-        if (value is IFormattable formattable)
-        {
-            builder.Append(formattable.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
-            return;
-        }
-
-        builder.Append(value);
     }
 
     private static void AppendEscapedString(StringBuilder builder, string value)

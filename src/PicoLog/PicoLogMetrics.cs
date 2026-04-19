@@ -12,18 +12,26 @@ public static class PicoLogMetrics
 
     private static readonly Meter Meter = new(MeterName);
     private static readonly ConcurrentDictionary<int, Func<long>> QueueDepthProviders = new();
-    private static readonly Counter<long> EntriesEnqueued =
-        Meter.CreateCounter<long>(EntriesEnqueuedName);
-    private static readonly Counter<long> EntriesDropped =
-        Meter.CreateCounter<long>(EntriesDroppedName);
-    private static readonly Counter<long> SinkFailures =
-        Meter.CreateCounter<long>(SinkFailuresName);
-    private static readonly Counter<long> ShutdownRejectedWrites =
-        Meter.CreateCounter<long>(ShutdownRejectedWritesName);
-    private static readonly ObservableGauge<long> QueuedEntries =
-        Meter.CreateObservableGauge<long>(QueuedEntriesName, ObserveQueuedEntries);
-    private static readonly Histogram<double> ShutdownDrainDuration =
-        Meter.CreateHistogram<double>(ShutdownDrainDurationName, unit: "ms");
+    private static readonly Counter<long> EntriesEnqueued = Meter.CreateCounter<long>(
+        EntriesEnqueuedName
+    );
+    private static readonly Counter<long> EntriesDropped = Meter.CreateCounter<long>(
+        EntriesDroppedName
+    );
+    private static readonly Counter<long> SinkFailures = Meter.CreateCounter<long>(
+        SinkFailuresName
+    );
+    private static readonly Counter<long> ShutdownRejectedWrites = Meter.CreateCounter<long>(
+        ShutdownRejectedWritesName
+    );
+    private static readonly ObservableGauge<long> QueuedEntries = Meter.CreateObservableGauge<long>(
+        QueuedEntriesName,
+        ObserveQueuedEntries
+    );
+    private static readonly Histogram<double> ShutdownDrainDuration = Meter.CreateHistogram<double>(
+        ShutdownDrainDurationName,
+        unit: "ms"
+    );
 
     internal static int RegisterQueueDepthProvider(Func<long> provider)
     {
@@ -52,10 +60,7 @@ public static class PicoLogMetrics
 
     private static IEnumerable<Measurement<long>> ObserveQueuedEntries()
     {
-        long totalQueuedEntries = 0;
-
-        foreach (var provider in QueueDepthProviders.Values)
-            totalQueuedEntries += provider();
+        var totalQueuedEntries = QueueDepthProviders.Values.Sum(provider => provider());
 
         yield return new Measurement<long>(totalQueuedEntries);
     }
