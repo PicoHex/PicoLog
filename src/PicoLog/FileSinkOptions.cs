@@ -4,18 +4,15 @@ public sealed class FileSinkOptions
 {
     public const string DefaultFilePath = "logs/app.log";
 
-    private string _filePath = DefaultFilePath;
-    private bool _hasExplicitFilePath;
-
     public string FilePath
     {
-        get => _filePath;
+        get;
         set
         {
-            _filePath = value;
-            _hasExplicitFilePath = true;
+            field = value;
+            HasExplicitFilePath = true;
         }
-    }
+    } = DefaultFilePath;
 
     public int BatchSize { get; set; } = 32;
 
@@ -23,7 +20,7 @@ public sealed class FileSinkOptions
 
     public TimeSpan FlushInterval { get; set; } = TimeSpan.FromMilliseconds(100);
 
-    public bool HasExplicitFilePath => _hasExplicitFilePath;
+    public bool HasExplicitFilePath { get; private set; }
 
     public FileSinkOptions CreateValidatedCopy()
     {
