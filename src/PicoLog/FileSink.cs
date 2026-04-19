@@ -120,7 +120,7 @@ public sealed class FileSink : ILogSink, IFlushableLogSink
 
                 try
                 {
-                await DrainBatchAsync(batch).ConfigureAwait(false);
+                    await DrainBatchAsync(batch).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -202,38 +202,36 @@ public sealed class FileSink : ILogSink, IFlushableLogSink
         GC.SuppressFinalize(this);
     }
 
-    private ValueTask<bool> EnterWriteOperationAsync(CancellationToken cancellationToken)
-        => _flushQuiesceCoordinator.TryEnterWriteOperationAsync(
+    private ValueTask<bool> EnterWriteOperationAsync(CancellationToken cancellationToken) =>
+        _flushQuiesceCoordinator.TryEnterWriteOperationAsync(
             CanEnterWriteOperationUnderLock,
             cancellationToken
         );
 
-    private void ExitWriteOperation()
-        => _flushQuiesceCoordinator.ExitWriteOperation();
+    private void ExitWriteOperation() => _flushQuiesceCoordinator.ExitWriteOperation();
 
-    private ValueTask BlockWritesAsync(CancellationToken cancellationToken)
-        => _flushQuiesceCoordinator.BlockWritesAsync(cancellationToken);
+    private ValueTask BlockWritesAsync(CancellationToken cancellationToken) =>
+        _flushQuiesceCoordinator.BlockWritesAsync(cancellationToken);
 
-    private ValueTask WaitForIdleAsync(CancellationToken cancellationToken)
-        => _flushQuiesceCoordinator.WaitForIdleAsync(IsOwnerIdleUnderLock, cancellationToken);
+    private ValueTask WaitForIdleAsync(CancellationToken cancellationToken) =>
+        _flushQuiesceCoordinator.WaitForIdleAsync(IsOwnerIdleUnderLock, cancellationToken);
 
-    private void ResumeWrites()
-        => _flushQuiesceCoordinator.ResumeWrites();
+    private void ResumeWrites() => _flushQuiesceCoordinator.ResumeWrites();
 
-    private void BeginBatch()
-        => _flushQuiesceCoordinator.BeginOwnerActivity(() => _activeBatchOperations++);
+    private void BeginBatch() =>
+        _flushQuiesceCoordinator.BeginOwnerActivity(() => _activeBatchOperations++);
 
-    private void BeginDequeuedMessage()
-        => _flushQuiesceCoordinator.BeginOwnerActivity(() => _activeDequeuedMessages++);
+    private void BeginDequeuedMessage() =>
+        _flushQuiesceCoordinator.BeginOwnerActivity(() => _activeDequeuedMessages++);
 
-    private void EndDequeuedMessage()
-        => _flushQuiesceCoordinator.EndOwnerActivity(
+    private void EndDequeuedMessage() =>
+        _flushQuiesceCoordinator.EndOwnerActivity(
             () => _activeDequeuedMessages--,
             IsOwnerIdleUnderLock
         );
 
-    private void EndBatch()
-        => _flushQuiesceCoordinator.EndOwnerActivity(
+    private void EndBatch() =>
+        _flushQuiesceCoordinator.EndOwnerActivity(
             () => _activeBatchOperations--,
             IsOwnerIdleUnderLock
         );

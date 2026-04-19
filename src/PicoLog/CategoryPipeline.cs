@@ -24,7 +24,9 @@ internal sealed class CategoryPipeline : IDisposable, IAsyncDisposable
         _sinkDispatcher = new InternalLogSinkDispatcher(_runtime);
         _queue = new InternalLoggerQueue(_runtime);
         _processingTask = ProcessEntriesAsync();
-        _queueDepthProviderId = PicoLogMetrics.RegisterQueueDepthProvider(_queue.GetQueuedEntryCount);
+        _queueDepthProviderId = PicoLogMetrics.RegisterQueueDepthProvider(
+            _queue.GetQueuedEntryCount
+        );
     }
 
     public void Write(LogEntry entry)
@@ -129,7 +131,7 @@ internal sealed class CategoryPipeline : IDisposable, IAsyncDisposable
 
                     try
                     {
-                    await _sinkDispatcher.DispatchEntryAsync(entry).ConfigureAwait(false);
+                        await _sinkDispatcher.DispatchEntryAsync(entry).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -144,38 +146,35 @@ internal sealed class CategoryPipeline : IDisposable, IAsyncDisposable
         }
     }
 
-    private void EnterWriteOperationSync()
-        => _flushQuiesceCoordinator.EnterWriteOperationSync();
+    private void EnterWriteOperationSync() => _flushQuiesceCoordinator.EnterWriteOperationSync();
 
-    private ValueTask EnterWriteOperationAsync(CancellationToken cancellationToken)
-        => _flushQuiesceCoordinator.EnterWriteOperationAsync(cancellationToken);
+    private ValueTask EnterWriteOperationAsync(CancellationToken cancellationToken) =>
+        _flushQuiesceCoordinator.EnterWriteOperationAsync(cancellationToken);
 
-    private void ExitWriteOperation()
-        => _flushQuiesceCoordinator.ExitWriteOperation();
+    private void ExitWriteOperation() => _flushQuiesceCoordinator.ExitWriteOperation();
 
-    private ValueTask BlockWritesAsync(CancellationToken cancellationToken)
-        => _flushQuiesceCoordinator.BlockWritesAsync(cancellationToken);
+    private ValueTask BlockWritesAsync(CancellationToken cancellationToken) =>
+        _flushQuiesceCoordinator.BlockWritesAsync(cancellationToken);
 
-    private ValueTask WaitForIdleAsync(CancellationToken cancellationToken)
-        => _flushQuiesceCoordinator.WaitForIdleAsync(IsOwnerIdleUnderLock, cancellationToken);
+    private ValueTask WaitForIdleAsync(CancellationToken cancellationToken) =>
+        _flushQuiesceCoordinator.WaitForIdleAsync(IsOwnerIdleUnderLock, cancellationToken);
 
-    private void ResumeWrites()
-        => _flushQuiesceCoordinator.ResumeWrites();
+    private void ResumeWrites() => _flushQuiesceCoordinator.ResumeWrites();
 
-    private void BeginDispatch()
-        => _flushQuiesceCoordinator.BeginOwnerActivity(() => _activeDispatchOperations++);
+    private void BeginDispatch() =>
+        _flushQuiesceCoordinator.BeginOwnerActivity(() => _activeDispatchOperations++);
 
-    private void BeginDequeuedEntry()
-        => _flushQuiesceCoordinator.BeginOwnerActivity(() => _activeDequeuedEntries++);
+    private void BeginDequeuedEntry() =>
+        _flushQuiesceCoordinator.BeginOwnerActivity(() => _activeDequeuedEntries++);
 
-    private void EndDequeuedEntry()
-        => _flushQuiesceCoordinator.EndOwnerActivity(
+    private void EndDequeuedEntry() =>
+        _flushQuiesceCoordinator.EndOwnerActivity(
             () => _activeDequeuedEntries--,
             IsOwnerIdleUnderLock
         );
 
-    private void EndDispatch()
-        => _flushQuiesceCoordinator.EndOwnerActivity(
+    private void EndDispatch() =>
+        _flushQuiesceCoordinator.EndOwnerActivity(
             () => _activeDispatchOperations--,
             IsOwnerIdleUnderLock
         );

@@ -10,7 +10,6 @@ internal enum LogWriteResult
 
 internal sealed class InternalLoggerQueue
 {
-    private readonly Channel<LogEntry> _channel;
     private readonly ChannelWriter<LogEntry> _writer;
     private readonly ChannelReader<LogEntry> _reader;
     private readonly LoggerFactoryRuntime _runtime;
@@ -26,7 +25,7 @@ internal sealed class InternalLoggerQueue
         _queueCapacity = _runtime.QueueCapacity;
         _queueFullMode = _runtime.QueueFullMode;
         _syncWriteTimeout = _runtime.SyncWriteTimeout;
-        _channel = Channel.CreateBounded<LogEntry>(
+        var channel = Channel.CreateBounded<LogEntry>(
             new BoundedChannelOptions(_queueCapacity)
             {
                 FullMode = _queueFullMode switch
@@ -40,8 +39,8 @@ internal sealed class InternalLoggerQueue
                 AllowSynchronousContinuations = false
             }
         );
-        _writer = _channel.Writer;
-        _reader = _channel.Reader;
+        _writer = channel.Writer;
+        _reader = channel.Reader;
     }
 
     public ValueTask<bool> WaitToReadAsync() => _reader.WaitToReadAsync();
@@ -66,10 +65,13 @@ internal sealed class InternalLoggerQueue
             _ => TryEnqueueSyncDropOldest(entry)
         };
 
-    public ValueTask<LogWriteResult> TryEnqueueAsync(LogEntry entry, CancellationToken cancellationToken) =>
+    public ValueTask<LogWriteResult> TryEnqueueAsync(
+        LogEntry entry,
+        CancellationToken cancellationToken
+    ) =>
         _queueFullMode switch
         {
-            LogQueueFullMode.Wait => TryEnqueueAsyncWithWait(entry, cancellationToken),
+            LogQueueFullMode.Wait => TryEnqueueAsyncWithWaitAsync(entry, cancellationToken),
             LogQueueFullMode.DropWrite => ValueTask.FromResult(TryEnqueueSyncDropWrite(entry)),
             _ => ValueTask.FromResult(TryEnqueueSyncDropOldest(entry))
         };
@@ -172,7 +174,7 @@ internal sealed class InternalLoggerQueue
         }
     }
 
-    private async ValueTask<LogWriteResult> TryEnqueueAsyncWithWait(
+    private async ValueTask<LogWriteResult> TryEnqueueAsyncWithWaitAsync(
         LogEntry entry,
         CancellationToken cancellationToken
     )
