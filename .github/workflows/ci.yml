@@ -105,6 +105,5 @@ jobs:
       if: startsWith(matrix.rid, 'linux-')
       run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
 
-    - name: Publish and validate sample
-      shell: pwsh
-      run: ./scripts/Validate-AotSample.ps1 -RuntimeIdentifier "${{ matrix.rid }}"
+    - name: Validate AOT publish path
+      run: dotnet publish samples/PicoLog.Sample/PicoLog.Sample.csproj --configuration Release --runtime ${{ matrix.rid }} --self-contained -p:UseProjectReferences=true
