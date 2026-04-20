@@ -345,7 +345,7 @@ public sealed class LoggerFactoryTests
                 new("number", 3),
                 new("nullable", null)
             ],
-            Scopes =  ["outer", "inner"]
+            Scopes = ["outer", "inner"]
         };
 
         var rendered = formatter.Format(entry);
