@@ -1,77 +1,27 @@
 name: CI
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
 
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
-  DOTNET_VERSION: '10.0.x'
+  DOTNET_VERSION: 10.0.x
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
 
 jobs:
   validate:
     name: Validate (${{ matrix.logical-target }})
     runs-on: ${{ matrix.runs-on }}
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - logical-target: win-x64
-            runs-on: windows-latest
-            rid: win-x64
-          - logical-target: win-arm64
-            runs-on: windows-11-arm
-            rid: win-arm64
-          - logical-target: linux-x64
-            runs-on: ubuntu-latest
-            rid: linux-x64
-          - logical-target: linux-arm64
-            runs-on: ubuntu-24.04-arm
-            rid: linux-arm64
-          - logical-target: osx-arm64
-            runs-on: macos-latest
-            rid: osx-arm64
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-    
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
-
-    - name: Show logical target
-      run: dotnet --info
-    
-    - name: Restore dependencies
-      run: dotnet restore ./PicoLog.slnx -p:UseProjectReferences=true
-    
-    - name: Build
-      run: dotnet build ./PicoLog.slnx --configuration Release --no-restore -p:UseProjectReferences=true
-    
-    - name: Validate code formatting
-      if: matrix.logical-target == 'linux-x64'
-      run: dotnet format ./PicoLog.slnx --verify-no-changes --no-restore
-    
-    - name: Run tests
-      run: dotnet test --project ./tests/PicoLog.Tests/PicoLog.Tests.csproj --configuration Release --no-build --verbosity normal -p:UseProjectReferences=true
-
-  aot-validation:
-    name: AOT Validation (${{ matrix.logical-target }})
-    runs-on: ${{ matrix.runs-on }}
-    needs: validate
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -93,18 +43,96 @@ jobs:
             rid: osx-arm64
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
 
-    - name: Install Clang (Linux)
-      if: startsWith(matrix.rid, 'linux-')
-      run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+      - name: Show logical target
+        run: echo Testing ${{ matrix.logical-target }} with RID ${{ matrix.rid }}
 
-    - name: Publish and validate sample
-      shell: pwsh
-      run: ./scripts/Validate-AotSample.ps1 -RuntimeIdentifier "${{ matrix.rid }}"
+      - name: Install Linux AOT prerequisites
+        if: startsWith(matrix.rid, 'linux-')
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev
+
+          if [[ "${{ matrix.rid }}" == "linux-arm64" ]]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+          fi
+
+      - name: Restore dependencies
+        run: dotnet restore ./PicoLog.slnx -p:UseProjectReferences=true
+
+      - name: Build
+        run: dotnet build ./PicoLog.slnx --configuration Release --no-restore -p:UseProjectReferences=true
+
+      - name: Validate code formatting
+        if: matrix.logical-target == 'linux-x64'
+        run: dotnet format ./PicoLog.slnx --verify-no-changes --no-restore
+
+      - name: Run tests
+        run: dotnet test --project ./tests/PicoLog.Tests/PicoLog.Tests.csproj --configuration Release --no-build --verbosity normal -p:UseProjectReferences=true
+
+      - name: Pack CI packages for package-consumer validation
+        shell: bash
+        run: |
+          rm -rf ./artifacts/ci-nupkg
+          rm -rf ./artifacts/ci-packages
+          mkdir -p ./artifacts/ci-nupkg
+          mkdir -p ./artifacts/ci-packages/abs ./artifacts/ci-packages/pico ./artifacts/ci-packages/di ./artifacts/ci-packages/consumer
+
+          dotnet pack src/PicoLog.Abs/PicoLog.Abs.csproj \
+            --configuration Release \
+            --output ./artifacts/ci-nupkg \
+            -p:UseProjectReferences=false \
+            -p:RestorePackagesPath="$GITHUB_WORKSPACE/artifacts/ci-packages/abs"
+
+          dotnet pack src/PicoLog/PicoLog.csproj \
+            --configuration Release \
+            --output ./artifacts/ci-nupkg \
+            -p:UseProjectReferences=false \
+            -p:RestoreAdditionalProjectSources="$GITHUB_WORKSPACE/artifacts/ci-nupkg" \
+            -p:RestorePackagesPath="$GITHUB_WORKSPACE/artifacts/ci-packages/pico"
+
+          dotnet pack src/PicoLog.DI/PicoLog.DI.csproj \
+            --configuration Release \
+            --output ./artifacts/ci-nupkg \
+            -p:UseProjectReferences=false \
+            -p:RestoreAdditionalProjectSources="$GITHUB_WORKSPACE/artifacts/ci-nupkg" \
+            -p:RestorePackagesPath="$GITHUB_WORKSPACE/artifacts/ci-packages/di"
+
+      - name: Validate PicoLog.DI package sample path
+        if: matrix.logical-target == 'linux-x64'
+        shell: bash
+        run: |
+          rm -rf samples/PicoLog.Sample/bin samples/PicoLog.Sample/obj
+          rm -rf ./artifacts/ci-packages/sample
+          mkdir -p ./artifacts/ci-packages/sample
+
+          dotnet restore samples/PicoLog.Sample/PicoLog.Sample.csproj \
+            --source https://api.nuget.org/v3/index.json \
+            --source "$GITHUB_WORKSPACE/artifacts/ci-nupkg" \
+            -p:UseProjectReferences=false \
+            -p:RestorePackagesPath="$GITHUB_WORKSPACE/artifacts/ci-packages/sample"
+
+          grep -q '"PicoLog.DI/0.0.0-dev"' samples/PicoLog.Sample/obj/project.assets.json
+          grep -q '"PicoLog.DI >= 0.0.0-dev"' samples/PicoLog.Sample/obj/project.assets.json
+          grep -q '"projectReferences": {}' samples/PicoLog.Sample/obj/project.assets.json
+
+          dotnet build samples/PicoLog.Sample/PicoLog.Sample.csproj \
+            --configuration Release \
+            --no-restore \
+            -p:UseProjectReferences=false
+
+          dotnet run --project samples/PicoLog.Sample/PicoLog.Sample.csproj \
+            --configuration Release \
+            --no-build \
+            -p:UseProjectReferences=false
+
+      - name: Validate AOT publish path
+        run: dotnet publish samples/PicoLog.Sample/PicoLog.Sample.csproj --configuration Release --runtime ${{ matrix.rid }} --self-contained -p:UseProjectReferences=true
