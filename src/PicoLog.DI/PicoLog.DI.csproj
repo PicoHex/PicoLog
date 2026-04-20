@@ -8,9 +8,14 @@
         <IsPackable>true</IsPackable>
     </PropertyGroup>
 
-    <ItemGroup>
+    <ItemGroup Condition="'$(UseProjectReferences)' == 'true'">
       <ProjectReference Include="..\PicoLog.Abs\PicoLog.Abs.csproj" />
       <ProjectReference Include="..\PicoLog\PicoLog.csproj" />
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(UseProjectReferences)' != 'true'">
+      <PackageReference Include="PicoLog.Abs" Version="$(Version)" />
+      <PackageReference Include="PicoLog" Version="$(Version)" />
     </ItemGroup>
 
     <ItemGroup>

@@ -12,8 +12,12 @@
         <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
     </PropertyGroup>
 
-    <ItemGroup>
+    <ItemGroup Condition="'$(UseProjectReferences)' == 'true'">
       <ProjectReference Include="..\..\src\PicoLog.DI\PicoLog.DI.csproj" />
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(UseProjectReferences)' != 'true'">
+      <PackageReference Include="PicoLog.DI" Version="$(Version)" />
     </ItemGroup>
 
     <ItemGroup>
