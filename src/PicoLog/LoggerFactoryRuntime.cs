@@ -9,7 +9,19 @@ internal sealed class LoggerFactoryRuntime
 
     public LoggerFactoryRuntime(ILogSink[] sinks, LoggerFactoryOptions? options)
     {
-        Sinks = sinks ?? throw new ArgumentNullException(nameof(sinks));
+        ArgumentNullException.ThrowIfNull(sinks);
+        Sinks = new ILogSink[sinks.Length];
+
+        for (var index = 0; index < sinks.Length; index++)
+        {
+            Sinks[index] = sinks[index] switch
+            {
+                IFlushableLogSink flushable when flushable is not IConsoleFallbackSink
+                    => new SinkFlushWrapper(flushable),
+                var other => other
+            };
+        }
+
         _options = (options ?? new LoggerFactoryOptions()).CreateValidatedCopy();
         _minLevel = (int)_options.MinLevel;
     }

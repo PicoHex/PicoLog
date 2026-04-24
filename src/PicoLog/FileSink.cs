@@ -59,25 +59,19 @@ public sealed class FileSink : ILogSink, IFlushableLogSink
 
     public async Task WriteAsync(LogEntry entry, CancellationToken cancellationToken = default)
     {
-        if (!await EnterWriteOperationAsync(cancellationToken).ConfigureAwait(false))
+        if (Volatile.Read(ref _disposeState) != 0)
             return;
+
+        var message = _formatter.Format(entry);
 
         try
         {
-            if (Volatile.Read(ref _disposeState) != 0)
-                return;
-
-            var message = _formatter.Format(entry);
             await _channel.Writer.WriteAsync(message, cancellationToken).ConfigureAwait(false);
             Interlocked.Increment(ref _queuedMessages);
         }
         catch (ChannelClosedException)
         {
             // Ignore writes that race with shutdown.
-        }
-        finally
-        {
-            ExitWriteOperation();
         }
     }
 
@@ -202,14 +196,6 @@ public sealed class FileSink : ILogSink, IFlushableLogSink
         GC.SuppressFinalize(this);
     }
 
-    private ValueTask<bool> EnterWriteOperationAsync(CancellationToken cancellationToken) =>
-        _flushQuiesceCoordinator.TryEnterWriteOperationAsync(
-            CanEnterWriteOperationUnderLock,
-            cancellationToken
-        );
-
-    private void ExitWriteOperation() => _flushQuiesceCoordinator.ExitWriteOperation();
-
     private ValueTask BlockWritesAsync(CancellationToken cancellationToken) =>
         _flushQuiesceCoordinator.BlockWritesAsync(cancellationToken);
 
@@ -278,5 +264,4 @@ public sealed class FileSink : ILogSink, IFlushableLogSink
         }
     }
 
-    private bool CanEnterWriteOperationUnderLock() => Volatile.Read(ref _disposeState) == 0;
 }
